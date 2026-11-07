@@ -1,0 +1,9 @@
+# 关掉「空 issue」：没有模板的反馈基本都要来回问，不如一开始就把几项信息收齐。
+blank_issues_enabled: false
+contact_links:
+  - name: 常见问题
+    url: https://github.com/qingxian997/folia-bilibili-source#常见问题
+    about: 装不上、墙上没卡片、一直转圈、没有歌词，先看这里
+  - name: 已知限制
+    url: https://github.com/qingxian997/folia-bilibili-source#已知限制
+    about: 限流、封面靠猜、搜索给的是视频 —— 这些是设计如此，不是 bug

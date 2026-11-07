@@ -1,0 +1,23 @@
+{
+    "name": "folia-bilibili-source",
+    "version": "0.9.0",
+    "private": true,
+    "description": "把 bilibili 当成 Folia / Folium 里的一个音源（预览版）",
+    "type": "module",
+    "license": "MIT",
+    "author": "qingxian997",
+    "repository": {
+        "type": "git",
+        "url": "git+https://github.com/qingxian997/folia-bilibili-source.git"
+    },
+    "scripts": {
+        "test": "node scripts/test.mjs",
+        "check": "node scripts/check-manifest.mjs"
+    },
+    "devDependencies": {
+        "jsdom": "^30.1.3"
+    },
+    "engines": {
+        "node": ">=20"
+    }
+}

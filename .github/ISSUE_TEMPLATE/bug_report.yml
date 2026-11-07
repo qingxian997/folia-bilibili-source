@@ -1,0 +1,105 @@
+name: 报告问题
+description: 界面不对、放不出声、白屏、模组卡片报错
+title: '[bug] '
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        填得越全，越可能一轮就定位。
+        只写「不显示」「有 bug」的反馈，我大概率只能回一句「请补充信息」，然后我们来回几轮。
+
+        开之前先看一眼 [已知限制](https://github.com/qingxian997/folia-bilibili-source#已知限制)，
+        有一半的「问题」在那里已经有解释了（限流、封面靠猜、搜索给的是视频）。
+
+  - type: input
+    id: folia
+    attributes:
+      label: Folia 版本
+      description: 设置 → 关于 里能看到
+      placeholder: 0.7.27
+    validations:
+      required: true
+
+  - type: input
+    id: mod
+    attributes:
+      label: 模组版本
+      description: 设置 → 模组 → 模组管理，bilibili 卡片上那行
+      placeholder: 0.9.0
+    validations:
+      required: true
+
+  - type: dropdown
+    id: os
+    attributes:
+      label: 系统
+      options:
+        - Windows 11
+        - Windows 10
+        - macOS
+        - Linux
+    validations:
+      required: true
+
+  - type: textarea
+    id: what
+    attributes:
+      label: 发生了什么
+      description: 你看到的 vs 你期望的。有报错就照抄原话。
+      placeholder: |
+        期望：点开收藏夹能看到 30 首。
+        实际：进去是空白，卡片上写着「歌曲 - 30」。
+    validations:
+      required: true
+
+  - type: textarea
+    id: steps
+    attributes:
+      label: 复现步骤
+      description: 从打开 Folia 开始，一步一行。能稳定复现的优先处理。
+      placeholder: |
+        1. 打开 Folia，音源选 bilibili
+        2. 书库 →「歌单」→ 点第三个收藏夹
+        3. 空白，等 10 秒也没变化
+    validations:
+      required: true
+
+  - type: textarea
+    id: evidence
+    attributes:
+      label: 截图 / 日志
+      description: 模组卡片那张（带红字一定要）+ 出问题的界面。直接拖进来就行。
+    validations:
+      required: true
+
+  - type: dropdown
+    id: logged
+    attributes:
+      label: 当时登录了吗
+      description: 很多「墙上没卡片」最后都是没登录，或者登录状态读失败
+      options:
+        - 已登录，账号正常
+        - 没登录 / 登录过期了
+        - 不确定
+    validations:
+      required: true
+
+  - type: textarea
+    id: changed
+    attributes:
+      label: 你改过什么
+      description: 手改过 mod.json？装过别的模组？换过音源？没有就写「没改」。
+      placeholder: 没改
+    validations:
+      required: false
+
+  - type: checkboxes
+    id: confirm
+    attributes:
+      label: 确认
+      options:
+        - label: 我搜过已有 issue，不是重复的
+          required: true
+        - label: 我读过 README 的「已知限制」和「常见问题」
+          required: true
