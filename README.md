@@ -1,5 +1,7 @@
 # bilibili for Folia
 
+[![CI](https://github.com/qingxian997/folia-bilibili-source/actions/workflows/ci.yml/badge.svg)](https://github.com/qingxian997/folia-bilibili-source/actions/workflows/ci.yml)
+
 把 bilibili 当成 [Folia](https://github.com/chthollyphile/folia-major) 里的一个普通音源：收藏夹变成「歌单」页签上的卡片，UP 主的合集会出现在「专辑」里，探索页能一直往下刷首页推荐，歌词直接取视频的 CC 字幕。
 
 界面全部由 Folia 自己画，这个模组只提供数据。
@@ -15,6 +17,8 @@
 > - **正式的 1.0 要等 Folium 2（Folia 0.8.0）**，那时接口才谈得上稳定。
 >
 > 现在能用，能长期自己用，但别拿它当基础设施。
+
+**[下载最新预览版](https://github.com/qingxian997/folia-bilibili-source/releases)** —— 下 `bili-fav-wall-0.9.0.zip`，装法见下面的[安装](#安装)。源码包在同一个页面。
 
 | | |
 | --- | --- |

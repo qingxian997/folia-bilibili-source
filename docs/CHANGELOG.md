@@ -17,6 +17,8 @@
   这份 CHANGELOG），加了 CI、issue 模板、PR 模板、MIT 许可证，以及跨平台的 `scripts/pack.py`。
 - **补了截图**：设置面板「内容」「播放与歌词 / 高级」两张，放在 `docs/screenshots/`。收藏夹名字
   是本人的，截图里打了码。
+- **方便别人找到它**：仓库加了 topics（`folia`、`folium`、`bilibili`、`lyrics` 等 14 个），
+  README 顶部放了下载入口和 CI 徽章，issue 补了 `host-update` / `needs-info` / `upstream` / `login` 四个标签。
 
 ## 0.8.6：按截图改的五处
 | 位置 | 之前 | 现在 |
