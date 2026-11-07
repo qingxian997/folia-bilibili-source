@@ -12,8 +12,11 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
+      # 只测 22 / 24：jsdom 30 拉进来的 undici 8 要求 Node >= 22.19，
+      # 20 上连 require 都过不去。宿主 Electron 43 内置的是 Node 24，
+      # 所以真正要贴的是 24，22 用来兜住下限。
       matrix:
-        node: ['20', '22', '24']
+        node: ['22', '24']
     steps:
       - uses: actions/checkout@v4
 

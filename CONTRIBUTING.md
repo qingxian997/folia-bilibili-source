@@ -29,7 +29,7 @@
 欢迎 PR，但请保持小而单一：
 
 - **一个 PR 只做一件事**。顺手重构 + 顺手改文案 + 顺手修 bug 混在一起，我没法逐行看。
-- **必须过 CI**：`npm test` 全绿、`node scripts/check-manifest.mjs` 通过。CI 会在 Node 20 和 22 上各跑一遍。
+- **必须过 CI**：`npm test` 全绿、`node scripts/check-manifest.mjs` 通过。CI 会在 Node 22 和 24 上各跑一遍（jsdom 30 依赖的 undici 8 要求 Node ≥ 22.19）。
 - **必须写清楚怎么验证的**：跑了哪些用例、有没有在真机上试过、试了什么。模板里有对应栏目。
 - **新增逻辑要有单测**，放在 `test/` 下，命名 `xxx.test.mjs`。纯函数优先放进 `lib/`，别往 `client.mjs` 里塞。
 - **更新 `docs/CHANGELOG.md`**：面向用户写一句「改了什么，用户能感觉到什么」。

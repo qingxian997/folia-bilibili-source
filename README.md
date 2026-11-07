@@ -167,7 +167,7 @@ docs/                 CHANGELOG、宿主契约、截图
 ## 跑测试
 
 ```bash
-npm install       # 只装 jsdom，测试用
+npm install       # 只装 jsdom，测试用（需要 Node 22.19 以上）
 npm test          # 244 个用例
 npm run check     # 校验 mod.json（字段白名单、权限、版本一致性）
 ```
