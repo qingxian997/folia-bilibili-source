@@ -3,7 +3,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
-    canAppend, wheelDeltaPx, MIN_ADVANCE_PX, QUIET_MS, MAX_STEP_PX,
+    canAppend, wheelDeltaPx, MIN_ADVANCE_PX, QUIET_MS, MAX_STEP_PX, SETTLE_MS, URGENT_ADVANCE_PX,
 } from '../lib/exploreContinuation.mjs';
 
 const FEED = {
@@ -33,6 +33,25 @@ test('常量就是防自激的三道闸', () => {
     assert.equal(MIN_ADVANCE_PX, 600);
     assert.equal(QUIET_MS, 1500);
     assert.equal(MAX_STEP_PX, 400);
+    assert.equal(SETTLE_MS, 220);
+});
+
+test('0.9.1：手指还在滑就不补，停下来才补', () => {
+    // 真机 profile：补批那一下宿主重排整墙要 55~155ms，正撞在滑动中间就是「滑一下卡一下」。
+    assert.equal(canAppend(base({ sinceInput: 0 })).reason, 'still-scrolling');
+    assert.equal(canAppend(base({ sinceInput: SETTLE_MS - 1 })).reason, 'still-scrolling');
+    assert.equal(canAppend(base({ sinceInput: SETTLE_MS })).ok, true, '停够了就补');
+    assert.equal(canAppend(base({ sinceInput: 5000 })).ok, true);
+});
+
+test('0.9.1：没滚够时先报没滚够，别拿「还在滑」掩盖真正的原因', () => {
+    assert.equal(canAppend(base({ advance: 0, sinceInput: 0 })).reason, 'no-advance');
+});
+
+test('0.9.1：一口气滑过头就别死等停下，先补上，别让墙空着', () => {
+    assert.equal(canAppend(base({ advance: URGENT_ADVANCE_PX, sinceInput: 0 })).ok, true);
+    assert.equal(canAppend(base({ advance: URGENT_ADVANCE_PX - 1, sinceInput: 0 })).reason, 'still-scrolling');
+    assert.equal(URGENT_ADVANCE_PX, 2400, '大约四屏，正常滚动碰不到');
 });
 
 test('wheelDeltaPx：只累计向下滚，按 deltaMode 折算并限幅', () => {

@@ -2,6 +2,8 @@
 
 先说清楚这个项目现在是什么状态：**预览版**。它跑在 Folium 的 `omni.providers` 实验接口上，宿主一改版就可能整块失效。所以这里的规矩偏向「能一起查清楚问题」，而不是「快速堆功能」。
 
+参与讨论、提 Issue、提 PR 都视为同意 [行为准则](CODE_OF_CONDUCT.md)。
+
 ## 提 Issue 之前
 
 1. 翻一眼 [README 的常见问题](README.md#常见问题) 和 [已知限制](README.md#已知限制)，有一半的问题在那里。
@@ -30,6 +32,8 @@
 
 | 标签 | 什么时候会出现 |
 | --- | --- |
+| `good first issue` | 改法明确、范围小、不碰宿主接口的活。第一次参与就从这里挑，我会在 issue 里写清楚动哪个文件 |
+| `help wanted` | 我这边做不了的（没有那台设备、没有那个账号、需要真机复现），需要人接 |
 | `host-update` | 宿主换版之后才坏的。这类多半要等接口对齐，不是你装错了 |
 | `needs-info` | 还缺宿主版本或复现步骤，补上才能往下查 |
 | `upstream` | 卡在 bilibili 或宿主那边，本模组改不了（限流、搜索给的是视频、没有全站收藏夹搜索） |
@@ -37,17 +41,30 @@
 
 开新的 issue 之前，先按 `bug` 加 `host-update` 筛一遍，看看是不是已经有人遇到同样的问题。
 
+想看能帮上什么忙，按 [`good first issue`](https://github.com/qingxian997/folia-bilibili-source/labels/good%20first%20issue) 和 [`help wanted`](https://github.com/qingxian997/folia-bilibili-source/labels/help%20wanted) 各筛一次就够了。
+
 ## PR 要求
 
 欢迎 PR，但请保持小而单一：
 
 - **一个 PR 只做一件事**。顺手重构 + 顺手改文案 + 顺手修 bug 混在一起，我没法逐行看。
+- **必须关联 Issue**：PR 正文里写 `Closes #123`（修 bug）或 `Refs #123`（做功能）。没关联的大改动我会先问清楚方向再合并 —— 不是不信任，是不想让你的时间白花。纯 typo / 纯注释的 PR 可以不关联。
 - **必须过 CI**：`npm test` 全绿、`node scripts/check-manifest.mjs` 通过。CI 会在 Node 22 和 24 上各跑一遍（jsdom 30 依赖的 undici 8 要求 Node ≥ 22.19）。
 - **必须写清楚怎么验证的**：跑了哪些用例、有没有在真机上试过、试了什么。模板里有对应栏目。
 - **新增逻辑要有单测**，放在 `test/` 下，命名 `xxx.test.mjs`。纯函数优先放进 `lib/`，别往 `client.mjs` 里塞。
 - **更新 `docs/CHANGELOG.md`**：面向用户写一句「改了什么，用户能感觉到什么」。
 - **不要动 `mod.json` 的 `folia` 版本范围**，除非你确实在新的宿主版本上验证过。
 - **不要提交 `node_modules/`、`dist/`、`*.zip`**，`.gitignore` 已经挡了，别硬加。
+
+### Review 是怎么走的
+
+我会尽快回。就算最后不合并，也会写清楚原因，最常见的是这三种：
+
+- **方向不对**：这个需求要靠宿主接口才做得到，而现在接口不给；
+- **范围太大**：一个 PR 里塞了好几件事，需要拆；
+- **验证不足**：改的是界面或播放行为，但没在真机上看过。
+
+被拒了不代表白写。把里面能独立出来的那部分拆成小 PR，或者先在 issue 里把场景说清楚，很多时候还能合。
 
 ### 不要碰的线
 
@@ -73,7 +90,7 @@
 
 ```bash
 npm install
-npm test               # 244 个用例，不需要 Folia
+npm test               # 251 个用例，不需要 Folia
 node scripts/check-manifest.mjs
 python scripts/pack.py # 产物在 dist/
 ```

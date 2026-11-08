@@ -228,14 +228,20 @@ test('search 把 bilibili 标题拆成歌名与歌手，并给出 provider 形�
     const page = await registered.providers[0].search('晴天', { limit: 20, offset: 0 });
     assert.equal(calls[0][0], 'search');
     assert.equal(page.items.length, 1);
-    assert.deepEqual(page.items[0], {
-        id: 'BV1xx411c7mD',
-        title: '晴天',
-        artists: ['周杰伦'],
-        album: '',
-        coverUrl: '//i0.hdslb.com/a.jpg',
-        durationMs: 269000,
-    });
+    // 0.9.1：搜索交付必须带 name / sourceRef（少了宿主按 DTO 过滤掉整批，搜索页永远空），
+    // 但 artists 要留在字符串形态 —— 搜索页那一行把整条 artists 当 React child 渲染，
+    // 元素是 {id,name} 对象会抛 React #31 白屏。
+    const song = page.items[0];
+    assert.equal(song.id, 'BV1xx411c7mD');
+    assert.equal(song.name, '晴天', 'name 是宿主列表行直接读的字段');
+    assert.equal(song.title, '晴天');
+    assert.deepEqual(song.artists, ['周杰伦'], '搜索交付的 artists 必须是字符串');
+    assert.equal(song.album, '');
+    assert.equal(song.coverUrl, '//i0.hdslb.com/a.jpg');
+    assert.equal(song.durationMs, 269000);
+    assert.equal(song.sourceRef.kind, 'online');
+    assert.equal(song.sourceRef.mediaId, 'BV1xx411c7mD');
+    assert.match(song.sourceRef.providerId, /bili$/, 'providerId 指回自己');
     dispose();
 });
 
@@ -260,6 +266,9 @@ test('getSong 复用缓存，getAudioUrl 透传音质与链路', async () => {
     await provider.search('晴天', { limit: 20, offset: 0 });
     const song = await provider.getSong('BV1xx411c7mD');
     assert.equal(song.title, '晴天');
+    // 搜索交付是字符串 artists，但 getSong 给播放器的必须是完整 DTO（宿主读 artists[0].name）
+    assert.deepEqual(song.artists, [{ id: 'BV1xx411c7mD#artist', name: '周杰伦' }]);
+    assert.equal(song.album.id, 'BV1xx411c7mD#album');
     assert.ok(!calls.some(([name]) => name === 'song'), '缓存命中时不该再问一次');
     const audio = await provider.getAudioUrl(song, 'lossless');
     const call = calls.find(([name]) => name === 'audio');
@@ -311,7 +320,7 @@ test('「显示原始标题」打开后 provider 输出 UP 主原话，歌手仍
     activate(folium);
     const page = await registered.providers[0].search('晴天', { limit: 20, offset: 0 });
     assert.equal(page.items[0].title, '【周杰伦】晴天');
-    assert.deepEqual(page.items[0].artists, ['周杰伦']);
+    assert.deepEqual(page.items[0].artists, ['周杰伦'], '原始标题只改 title，歌手还是解析出来的');
 });
 
 test('开关切换后缓存失效，标题跟着变回来', async () => {
@@ -323,4 +332,29 @@ test('开关切换后缓存失效，标题跟着变回来', async () => {
     setSettings({ rawTitle: true });
     const second = await provider.search('晴天', { limit: 20, offset: 0 });
     assert.equal(second.items[0].title, '【周杰伦】晴天');
+});
+
+test('歌词匹配：artists 是 {id,name} 对象时也能拼出正确的搜索词（0.9.1）', async () => {
+    const { folium, registered } = install();
+    const queries = [];
+    folium.omni.searchSongs = (query) => {
+        queries.push(query);
+        return Promise.resolve({
+            items: [{ id: '1', title: '晴天', artist: '周杰伦', album: '叶惠美', source: 'netease', ref: 'song-1', durationMs: 269000 }],
+            nextCursor: null,
+            total: 1,
+        });
+    };
+    const dispose = activate(folium);
+    // getSong()/播放队列交付的是完整 DTO，artists 是对象数组
+    const lyrics = await registered.providers[0].getLyrics({
+        id: 'BV1xx411c7mD',
+        title: '晴天',
+        artists: [{ id: 'BV1xx411c7mD#artist', name: '周杰伦' }],
+    });
+    assert.ok(lyrics && lyrics.main, '仍然要匹配到歌词');
+    assert.equal(queries.length, 1);
+    assert.equal(queries[0].includes('[object Object]'), false, '不能把对象拼进搜索词');
+    assert.match(queries[0], /周杰伦/, '歌手要带上');
+    dispose();
 });

@@ -157,7 +157,7 @@ const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 const biliSong = { id: SONG_ID, title: 'また夏を追う', artist: 'ヨルシカ', source: PROVIDER };
 
-test('设置面板：四组结构，内容默认展开、播放与高级折起来', async () => {
+test('设置面板：四组结构，默认全部折起来', async () => {
     const { folium, registered } = install();
     const dispose = activate(folium);
     const container = document.createElement('div');
@@ -170,15 +170,18 @@ test('设置面板：四组结构，内容默认展开、播放与高级折起�
         heads.map((head) => head.querySelector('.bf-group-name').textContent),
         ['账号', '内容', '播放与歌词', '高级'],
     );
-    assert.deepEqual(heads.map((head) => head.getAttribute('data-open')), ['1', '1', '0', '0']);
+    // 0.9.1：四组一律默认收起，一进来先看到四个标题和摘要。
+    assert.deepEqual(heads.map((head) => head.getAttribute('data-open')), ['0', '0', '0', '0']);
 
     const boxes = [...container.querySelectorAll('.bf-group-body')];
-    assert.deepEqual(boxes.map((box) => box.hidden), [false, false, true, true], '播放和高级默认折起来');
+    assert.deepEqual(boxes.map((box) => box.hidden), [true, true, true, true], '默认全折起来');
 
     // 折起来的组在标题右边给一句摘要，省得为了看一眼展开。
     const summary = heads[3].querySelector('.bf-group-summary').textContent;
     assert.match(summary, /不按时长过滤|跳过超/);
     assert.match(heads[2].querySelector('.bf-group-summary').textContent, /先匹配其他平台，再 CC 字幕/);
+    // 账号组收起后也要能看出登没登录。
+    assert.match(heads[0].querySelector('.bf-group-summary').textContent, /未登录|正在读/);
     // 0.8.6：筛选方式不再单占一行，画在各自的表里（收藏夹一张、合集一张）。
     const contentGroup = [...container.querySelectorAll('.bf-group')][1];
     assert.match(contentGroup.textContent, /勾掉的隐藏/);
@@ -486,6 +489,52 @@ test('收藏夹选择器：能搜、能按来源筛，勾一下写进黑名单',
     dispose();
 });
 
+test('收藏夹 / 合集列表默认折叠，折叠头写清数量和实际显示数（0.9.1）', async () => {
+    const folders = [
+        { id: '1001', title: '默认收藏夹', count: 30, isDefault: true },
+        { id: '2002', title: '日语歌', count: 120 },
+        { id: '3003', title: '纯音乐', count: 5 },
+    ];
+    const { folium, registered, settingsValues } = install({ folders });
+    const dispose = activate(folium);
+    const container = document.createElement('div');
+    document.body.appendChild(container);
+    registered.settings[0].settingsPanel(container, ctxOf({ settings: null }));
+    await tick();
+
+    const pickerOf = () => container.querySelector('[data-field="excludedFolders"]');
+    const bar = pickerOf().querySelector('.bf-sub-head');
+    assert.ok(bar, '列表有自己的折叠头');
+    assert.equal(pickerOf().querySelector('.bf-sub').hidden, true, '默认收起来，不占那 280px');
+    assert.equal(bar.getAttribute('data-open'), '0');
+    assert.match(bar.textContent, /收藏夹/);
+    assert.match(bar.textContent, /共 3 个 · 显示 3 个/, '收起时也能看出有多少个');
+
+    bar.click();
+    assert.equal(pickerOf().querySelector('.bf-sub').hidden, false, '点开就展开');
+    assert.equal(pickerOf().querySelector('.bf-sub-head').getAttribute('data-open'), '1');
+
+    // 勾掉一个之后，折叠头上的数字要跟着变（收回再展开也得是新的）。
+    const row = checkRows(pickerOf()).find((node) => node.textContent.includes('日语歌'));
+    const box = row.querySelector('input[type="checkbox"]');
+    box.checked = true;
+    box.dispatchEvent(new dom.window.Event('change', { bubbles: true }));
+    assert.equal(settingsValues.excludedFolders.includes('fav:2002'), true);
+    assert.match(pickerOf().querySelector('.bf-sub-head').textContent, /共 3 个 · 显示 2 个/);
+
+    pickerOf().querySelector('.bf-sub-head').click();
+    assert.equal(pickerOf().querySelector('.bf-sub').hidden, true, '再点一下收回去');
+    assert.match(pickerOf().querySelector('.bf-sub-head').textContent, /共 3 个 · 显示 2 个/, '收起后数字还在');
+
+    // 合集表是另一把锁：收藏夹展开不影响它。
+    const albums = container.querySelector('[data-field="excludedAlbums"]');
+    assert.equal(albums.querySelector('.bf-sub').hidden, true, '合集表仍然收着');
+    assert.match(albums.querySelector('.bf-sub-head').textContent, /合集/);
+
+    container.remove();
+    dispose();
+});
+
 test('收藏夹选择器：勾选里留着已经不存在的夹子时，计数点出来并能一键清掉', async () => {
     const folders = [
         { id: '1001', title: '默认收藏夹', count: 30, isDefault: true },
@@ -664,6 +713,31 @@ test('额外列表：旧配置里认不出的那一行标红，可以手动移�
     await tick();
     assert.equal(settingsValues.extraCollections.includes('这一行是坏的'), false);
     assert.equal(extras().querySelectorAll('.bf-ext-row.bf-ext-bad').length, 0);
+
+    container.remove();
+    dispose();
+});
+
+test('额外列表：一行里用空格/全角逗号塞两条时，移除也能删掉（0.9.1）', async () => {
+    const { folium, registered, settingsValues } = install({
+        settings: { extraCollections: 'https://www.bilibili.com/medialist/detail/ml337285064 ml111' },
+    });
+    const dispose = activate(folium);
+    const container = document.createElement('div');
+    document.body.appendChild(container);
+    registered.settings[0].settingsPanel(container, ctxOf({ settings: null }));
+    await tick();
+
+    const extras = () => container.querySelector('[data-field="extraCollections"]');
+    // 解析层认空格分隔，所以这里是两行
+    assert.equal(extras().querySelectorAll('.bf-ext-row').length, 2);
+
+    // 删掉第二行：写回设置里不能再留着 ml111
+    const rows = extras().querySelectorAll('.bf-ext-row');
+    rows[1].querySelector('.bf-btn').click();
+    await tick();
+    assert.equal(/\bml111\b/.test(settingsValues.extraCollections), false, '整行被删掉');
+    assert.match(settingsValues.extraCollections, /337285064/, '另一条还在');
 
     container.remove();
     dispose();

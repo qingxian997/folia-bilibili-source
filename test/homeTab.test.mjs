@@ -180,3 +180,17 @@ test('卸载后没有残留：所有 display 都还原', () => {
     for (const button of doc.querySelectorAll('button')) assert.equal(button.style.display, '');
     assert.equal(hider.hiddenCount, 0);
 });
+
+test('0.9.1：反复 tick 不会把同一颗胶囊重复记进隐藏表（原值是空串时曾无界增长）', () => {
+    const dom = bravais();
+    const doc = dom.window.document;
+    const hider = createHomeTabHider({ document: doc, isActive: () => true, currentTab: () => 'playlist' });
+    hider.start();
+    assert.equal(hider.hiddenCount, 1);
+    // 宿主重绘会不停触发 tick；这里 tick 几十次，隐藏表必须还是 1 条。
+    for (let i = 0; i < 30; i += 1) hider.tick();
+    assert.equal(hider.hiddenCount, 1, '同一颗胶囊只该记一条');
+    hider.stop();
+    assert.equal(doc.querySelector('[data-bravais-tab="radio"]').style.display, '');
+    assert.equal(hider.hiddenCount, 0);
+});

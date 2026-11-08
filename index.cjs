@@ -108,16 +108,34 @@ module.exports = function activate(api) {
         await cookies.clear();
     }
 
-    /** 游客指纹：没有 buvid3 时 bilibili 会把搜索当风控流量（-412）。 */
+    /**
+     * 游客指纹：没有 buvid3 时 bilibili 会把搜索当风控流量（-412）。
+     *
+     * 0.9.1：拿到之后存一份，下次启动**接着用同一个**。以前每次起进程都重新申请，
+     * 等于每次重启都换一台「新设备」——同一个 SESSDATA 配一堆陌生指纹，
+     * 是「昨天还登录着，今天要重扫」的常见诱因。存储失败就退回每次现取。
+     */
     async function ensureBuvid() {
         if (state.buvid) return state.buvid;
         if (state.buvidPending) return state.buvidPending;
         // 注意：这次请求不能带 cookie，否则 cookieHeader → ensureBuvid 会递归。
         state.buvidPending = (async () => {
             try {
+                const kept = await api.storage.get('buvid').catch(() => null);
+                if (kept && typeof kept === 'object' && kept.b3) {
+                    state.buvid = { b3: String(kept.b3), b4: String(kept.b4 || '') };
+                    return state.buvid;
+                }
+            } catch {
+                /* 老宿主没有 storage 就现取 */
+            }
+            try {
                 const json = await getJson(`${API}/x/frontend/finger/spi`, { noCookie: true });
                 const data = json && json.data;
                 state.buvid = { b3: (data && data.b_3) || '', b4: (data && data.b_4) || '' };
+                if (state.buvid.b3) {
+                    void Promise.resolve(api.storage.set('buvid', state.buvid)).catch(() => {});
+                }
             } catch (error) {
                 api.log.warn('bili: buvid bootstrap failed', error);
                 state.buvid = { b3: '', b4: '' };
@@ -551,15 +569,33 @@ module.exports = function activate(api) {
         try {
             const json = await getJson(`${API}/x/web-interface/nav`);
             const data = (json && json.data) || {};
+            const code = Number(json && json.code);
             return {
                 loggedIn: Boolean(data.isLogin),
                 mid: data.mid ? String(data.mid) : '',
                 uname: data.uname || '',
                 face: cover(data.face),
                 saved: Boolean(state.cookie),
+                /**
+                 * 0.9.1：接口到底有没有给出答案。
+                 *
+                 * `-101` 是「未登录 / 凭据过期」，属于明确回答；`-412`（风控）、`-799`
+                 * （限流）和网络错误都不是 —— 那些情况 Cookie 还好好的，只是这一次没问到。
+                 * 以前一律返回 loggedIn:false，宿主就把整个音源画成未登录，用户以为掉号了。
+                 */
+                settled: code === 0 || code === -101,
+                code,
             };
         } catch (error) {
-            return { loggedIn: false, mid: '', uname: '', face: '', saved: Boolean(state.cookie), error: String(error.message) };
+            return {
+                loggedIn: false,
+                mid: '',
+                uname: '',
+                face: '',
+                saved: Boolean(state.cookie),
+                settled: false,
+                error: String(error.message),
+            };
         }
     });
 

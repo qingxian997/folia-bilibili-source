@@ -39,7 +39,7 @@ import {
 import {
     parseExploreCursor, exploreSection, feedAnswer, sectionAnswer,
 } from './lib/explore.mjs';
-import { canAppend, wheelDeltaPx, MAX_STEP_PX } from './lib/exploreContinuation.mjs';
+import { canAppend, wheelDeltaPx, MAX_STEP_PX, SETTLE_MS } from './lib/exploreContinuation.mjs';
 import {
     searchCollectionPage, remoteSeasonRaw, remoteSeasonFromKey, hasLocalNameHit,
 } from './lib/searchCollections.mjs';
@@ -52,7 +52,7 @@ const HOST_LYRIC_ORDER = ['netease', 'qq', 'kugou'];
 /** 宿主用它画音源徽标：bilibili 的粉。 */
 const BILI_PINK = '#FB7299';
 /** 面板上显示的版本号，和 mod.json 保持一致（打包校验会盯这一条）。 */
-const MOD_VERSION = '0.9.0';
+const MOD_VERSION = '0.9.1';
 /** 批量改收藏夹时每首之间的间隔：fav/resource/deal 连发几十个必吃 -412。 */
 const ADD_INTERVAL_MS = 250;
 
@@ -81,6 +81,23 @@ export default function activate(folium) {
         if (id && typeof id.unref === 'function') id.unref();
         return id;
     }
+
+    /**
+     * 停用时也要能「放行」的等待。
+     *
+     * `later()` 在 disposed 之后不回调，dispose() 还会把已排上的定时器清掉——
+     * 于是 `await new Promise((resolve) => later(resolve, ms))` 会永远吊着，
+     * 调用它的宿主 API（比如「加入歌单」）就一直转圈不返回。
+     * 这里额外竞一条「停用即放行」的 Promise，保证无论如何都能往下走。
+     */
+    let releaseDisposeGate = () => {};
+    const disposeGate = new Promise((resolve) => {
+        releaseDisposeGate = resolve;
+    });
+    const settle = (ms) => Promise.race([
+        new Promise((resolve) => later(resolve, ms)),
+        disposeGate,
+    ]);
 
     /** bvid → { song, at }，供歌词匹配和 getSong 复用。 */
     const meta = new Map();
@@ -160,26 +177,36 @@ export default function activate(folium) {
         };
     }
 
+    /**
+     * 搜索结果的一条 → 交付给宿主的歌曲对象。
+     *
+     * 0.9.1 两处坑，都只在搜索这条路上：
+     *   1. 以前手搓的简化版少 `name` 和 `sourceRef`，宿主按歌曲 DTO 过滤时整批丢掉，
+     *      表现就是「搜索永远未找到相关结果」，而卡片墙上一切正常；
+     *   2. 补成完整 DTO 后又撞上 React #31 —— 搜索页那一行把整条 `artists` 当 React child
+     *      渲染，元素是 `{id,name}` 对象就抛「Objects are not valid as a React child」。
+     *      宿主自己的标准化函数会把字符串补成对象，所以这一层交字符串数组。
+     * 完整 DTO 仍然留在 meta 里，`getSong()` 和播放器拿到的都是完整形状。
+     */
     function toSong(raw) {
         const made = decorate(raw);
-        const song = {
-            id: String(raw.bvid || raw.id || ''),
-            title: made.title,
-            artists: made.artist ? [made.artist] : raw.author ? [raw.author] : [],
-            album: '',
-            coverUrl: raw.cover || undefined,
-            durationMs: Number(raw.durationMs) || 0,
-        };
-        if (!song.id) return null;
-        meta.set(song.id, {
+        const full = videoToSong(raw, { providerId: myProviderId(), decorate: () => made });
+        if (!full) return null;
+        meta.set(full.id, {
             at: Date.now(),
-            song,
+            song: full,
             flags: made.flags,
             rawTitle: raw.title || '',
             author: raw.author || '',
         });
         trimMap(meta, 2000);
-        return song;
+        return {
+            ...full,
+            artists: [made.artist || raw.author || '未知歌手'],
+            // 搜索列表行按旧读法读顶层 coverUrl / 字符串 album
+            ...(raw.cover ? { coverUrl: raw.cover } : {}),
+            album: '',
+        };
     }
 
     // -------------------------------------------------------------- search
@@ -225,6 +252,8 @@ export default function activate(folium) {
                 const value = { items: raw, hasMore: Boolean(answer && answer.hasMore) };
                 entry.pages.set(page, value);
                 entry.total = Number(answer.total) || entry.total;
+                // 一直往下翻的时候这些原始页不会有人再要，留 40 页够翻回去一两屏了
+                if (entry.pages.size > 40) entry.pages.delete(entry.pages.keys().next().value);
                 return value;
             } finally {
                 inflightPages.delete(flight);
@@ -283,6 +312,7 @@ export default function activate(folium) {
         const value = { items: answer.items || [], total: Number(answer.total) || 0, hasMore: Boolean(answer.hasMore) };
         entry.pages.set(page, value);
         entry.total = value.total || entry.total;
+        if (entry.pages.size > 40) entry.pages.delete(entry.pages.keys().next().value);
         trimMap(folderCache, 40);
         return value;
     }
@@ -551,7 +581,12 @@ export default function activate(folium) {
      */
     function matchTrack(song) {
         return lyricOnce(song, 'match', async () => {
-            const artist = (song.artists && song.artists[0]) || '';
+            const first = song.artists && song.artists[0];
+            // getSong() 交付的是完整 DTO，`artists` 是 [{id,name}]；搜索列表那条是字符串。
+            // 直接拿对象去拼搜索词会得到 "[object Object]"，歌手加权也一起失效。
+            const artist = typeof first === 'string'
+                ? first
+                : String((first && (first.name || first.title)) || '');
             const query = [song.title, artist].filter(Boolean).join(' ').trim();
             if (!query) return null;
             const providers = hostProviders();
@@ -948,22 +983,30 @@ export default function activate(folium) {
             return false;
         };
 
-        Map.prototype.get = function (key) {
+        const patchedGet = function (key) {
             const own = originalGet.call(this, key);
             if (own !== undefined) return own;
             if (key === LYRIC_SOURCE_ID && isHostTable(this)) return meta;
             return own;
         };
-        Map.prototype.has = function (key) {
+        const patchedHas = function (key) {
             if (key === LYRIC_SOURCE_ID && !originalHas.call(this, key) && isHostTable(this)) return true;
             return originalHas.call(this, key);
+        };
+        Map.prototype.get = patchedGet;
+        Map.prototype.has = patchedHas;
+
+        // 补丁打在 Map.prototype 上，跨模组可见：先卸载的那个不能把别人后装的补丁一起抹掉。
+        // 只在「现在挂的还是我这一份」时才换回去。
+        const unpatch = () => {
+            if (Map.prototype.get === patchedGet) Map.prototype.get = originalGet;
+            if (Map.prototype.has === patchedHas) Map.prototype.has = originalHas;
         };
 
         // 装好的这瞬间可能已经被卸载过、甚至还装过一轮新的（import 是异步的）。
         // 代数对不上就说明我这一份已经过时了：原型换回去，数组一个字都还没写，干净退出。
         if (generation !== lyricGeneration) {
-            Map.prototype.get = originalGet;
-            Map.prototype.has = originalHas;
+            unpatch();
             note('装好时已经过时了，就地拆掉', { generation, current: lyricGeneration });
             return false;
         }
@@ -983,8 +1026,7 @@ export default function activate(folium) {
             ids: Array.isArray(ids) ? ids : null,
             metaMap,
             restore: () => {
-                Map.prototype.get = originalGet;
-                Map.prototype.has = originalHas;
+                unpatch();
             },
         };
         lyricDiag.ok = true;
@@ -1090,7 +1132,7 @@ export default function activate(folium) {
         const has = (value) => ids.includes(value);
         const top = has(30251) ? 'FLAC' : has(30250) ? t('杜比', 'Dolby') : has(30280) ? '192K' : has(30232) ? '132K' : '64K';
         const map = {
-            standard: has(30216) ? '64K' : '64K',
+            standard: '64K',
             high: has(30280) ? '192K' : has(30232) ? '132K' : '64K',
             ultra: has(30280) ? '192K' : has(30232) ? '132K' : '64K',
             lossless: top,
@@ -1181,7 +1223,14 @@ export default function activate(folium) {
     const GROUPS = {
         account: {
             label: { 'zh-CN': '账号', en: 'Account' },
-            summary: () => '',
+            // 折叠起来也要能看出登没登录，否则四个组全收起时用户只能逐组点开找。
+            summary: (values, L, ctx) => {
+                if (ctx && ctx.loading) return L({ 'zh-CN': '正在读…', en: 'reading…' });
+                const me = ctx && ctx.me;
+                return me
+                    ? me.nickname
+                    : L({ 'zh-CN': '未登录 · 点开扫码', en: 'signed out · tap to sign in' });
+            },
         },
         content: {
             label: { 'zh-CN': '内容', en: 'Content' },
@@ -1910,7 +1959,11 @@ export default function activate(folium) {
     //   * 按用户选择「照原样显示」，模组侧不再做全局去重，宿主自己在 section pool
     //     里用 fl() / xl() 去重；
     //   * feedAnswer() 不再带 refreshReadsAnew，否则「换一批」会重放旧池子。
-    const EXPLORE_PAGE = 30;
+    // 0.9.1：每批从 30 降到 18。宿主每追加一次就重排整面 transform 墙，
+    // 实测一次 55~155ms（27 张卡），掉帧全落在这一刻。批量小了单次重排更轻，
+    // 代价是同样的滚动距离内批次数多一点 —— 但人感知的是单次卡顿的长度，不是次数。
+    // bilibili 的 fresh_idx 没有上界，18 一首不少。
+    const EXPLORE_PAGE = 18;
     let exploreNextIdx = 1;
     const exploreFlights = new Map();
 
@@ -2139,9 +2192,9 @@ export default function activate(folium) {
                     : String(song || '');
             if (!id) continue;
             if (done > 0) {
-                // 模组被停用时就别再等了，直接收尾（later() 在 disposed 后不会回调）
+                // 模组被停用时就别再等了，直接收尾
                 if (disposed) break;
-                await new Promise((resolve) => later(resolve, ADD_INTERVAL_MS));
+                await settle(ADD_INTERVAL_MS);
                 if (disposed) break;
             }
             try {
@@ -2205,23 +2258,71 @@ export default function activate(folium) {
         extraCache = { sig: '', items: [], at: 0 };
     }
 
+    /**
+     * 上一次成功读到的账号信息。
+     *
+     * 0.9.1：用户反馈「登录老是失效」。查下来 Cookie 大多是好的，是 nav 接口偶尔
+     * 被限流 / 风控（-412、-799）或者请求超时，而宿主一拿到 null 就把整个音源
+     * 画成未登录 —— 一次网络抖动看起来就像掉号。现在把上次的身份留一份：
+     * 读不到时先按已登录显示，等下次真读到再说。只有接口**明确**说没登录（-101）
+     * 才清掉，所以真过期、真退登不会一直被旧信息挡着。
+     */
+    const PROFILE_KEY = 'bili:profile';
+
+    function readProfile() {
+        try {
+            const raw = localStorage.getItem(PROFILE_KEY);
+            if (!raw) return null;
+            const parsed = JSON.parse(raw);
+            return parsed && parsed.id ? parsed : null;
+        } catch {
+            return null;
+        }
+    }
+
+    function writeProfile(status) {
+        const kept = {
+            id: String(status.mid || ''),
+            nickname: status.uname || 'bilibili 用户',
+            ...(status.face ? { avatarUrl: status.face } : {}),
+            at: Date.now(),
+        };
+        if (!kept.id) return kept;
+        try {
+            localStorage.setItem(PROFILE_KEY, JSON.stringify(kept));
+        } catch {
+            /* 隐私模式 / 配额满：只是下次没得回落，不影响本次 */
+        }
+        return kept;
+    }
+
+    function clearProfile() {
+        try {
+            localStorage.removeItem(PROFILE_KEY);
+        } catch {
+            /* 没有就算了 */
+        }
+    }
+
     const auth = {
         async getLoginStatus() {
             try {
                 const status = await rpc('status');
-                if (!status || !status.loggedIn) return null;
-                return {
-                    id: String(status.mid || ''),
-                    nickname: status.uname || 'bilibili 用户',
-                    ...(status.face ? { avatarUrl: status.face } : {}),
-                };
+                if (status && status.loggedIn) return writeProfile(status);
+                // 接口没给明确答案（限流 -799、风控 -412、超时）：Cookie 还在，
+                // 就沿用上次读到的身份，别把整个音源画成未登录。
+                if (status && status.saved && !status.settled) return readProfile();
+                // 明确回答「没登录 / 凭据过期」（-101）才真算掉号，旧身份一并清掉。
+                if (status && status.settled) clearProfile();
+                return null;
             } catch (error) {
                 log.warn('bili: 读登录状态失败', String(error && error.message));
-                return null;
+                return readProfile();
             }
         },
         async logout() {
             await rpc('logout');
+            clearProfile();
             clearCaches();
             try {
                 await rpc('clearCache');
@@ -2370,6 +2471,10 @@ export default function activate(folium) {
     let exploreWatchDoc = null;
     let exploreScrollQueued = false;
     let exploreLastReason = '';
+    /** 最后一次真实滚动输入的时刻：补批要等它过去 SETTLE_MS，把重排挪到停下之后。 */
+    let exploreLastInputAt = 0;
+    /** 「停下来再补」的兜底定时器：滚动结束不会再有事件，得自己醒一次。 */
+    let exploreSettleTimer = 0;
 
     function currentHomeTab() {
         try {
@@ -2463,6 +2568,8 @@ export default function activate(folium) {
     function onExploreProgress(event) {
         if (disposed || !exploreWatchOn) return;
         if (blockedScrollTarget(event && event.target)) return;
+        // 任何真实滚动输入都记时间戳：补批要等手指离开再动手。
+        exploreLastInputAt = Date.now();
         const gained = progressOf(event);
         // 向上滚、宿主重排自派的 scroll（scrollTop 恒 0）都是 0，直接不排队。
         if (!(gained > 0)) return;
@@ -2495,18 +2602,30 @@ export default function activate(folium) {
         } catch {
             return;
         }
+        const now = Date.now();
         const verdict = canAppend({
             active,
             visible,
             blocked: false,
             inFlight: exploreLoading,
             feed: feedSnapshot(state && state.feed),
-            now: Date.now(),
+            now,
             lastAppendAt: exploreLastAppendAt,
             advance: exploreAdvance,
+            sinceInput: exploreLastInputAt ? now - exploreLastInputAt : Infinity,
         });
         exploreLastReason = verdict.reason;
-        if (!verdict.ok) return;
+        if (!verdict.ok) {
+            // 用户还在滑：推迟到手指离开。滚动一停就不再派发事件，得自己排一次重试，
+            // 否则最后那 600px 永远等不到补批。只留一个定时器，不叠。
+            if (verdict.reason === 'still-scrolling' && !exploreSettleTimer) {
+                exploreSettleTimer = later(() => {
+                    exploreSettleTimer = 0;
+                    appendIfNeeded();
+                }, SETTLE_MS + 40);
+            }
+            return;
+        }
 
         // 万一宿主版本变了、loadMore 不再推进游标，连续几次没进展就安静放弃。
         const feed = state && state.feed;
@@ -2552,6 +2671,11 @@ export default function activate(folium) {
         exploreLastObservedTop = null;
         exploreTouchY = null;
         exploreLoading = false;
+        exploreLastInputAt = 0;
+        if (exploreSettleTimer) {
+            clearTimeout(exploreSettleTimer);
+            exploreSettleTimer = 0;
+        }
         if (exploreWatchDoc && typeof exploreWatchDoc.removeEventListener === 'function') {
             for (const name of EXPLORE_INPUT_EVENTS) {
                 try {
@@ -2571,6 +2695,10 @@ export default function activate(folium) {
         try {
             const host = await openHostLibrary({ log });
             if (!host) return;
+            // openHostLibrary 要连着 import 十几个 chunk，这么长时间里完全可能已经被停用。
+            // 那时 dispose() 已经把监听骨架拆掉了，再往下走会新挂一批永不释放的
+            // wheel / scroll / touchmove 监听，用户每滚一下还在让宿主继续加载。
+            if (disposed) return;
             const id = myProviderId();
             const provider = host.provider(id);
             if (!provider) {
@@ -2797,6 +2925,7 @@ export default function activate(folium) {
 
     return () => {
         disposed = true;
+        releaseDisposeGate();
         for (const id of timers) clearTimeout(id);
         timers.clear();
         try {

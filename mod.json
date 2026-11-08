@@ -2,7 +2,7 @@
     "folium": 1,
     "id": "bili-fav-wall",
     "name": "bilibili",
-    "version": "0.9.0",
+    "version": "0.9.1",
     "author": "qingxian997",
     "description": "把 bilibili 当成一个音源用。收藏夹和 UP 主合集会变成「收藏」「合集」页签里的卡片，探索页能一直往下刷首页推荐。登录用扫码，点心形按钮就收进你选的收藏夹，歌词用视频的 CC 字幕。设置里收藏夹和合集可以各筛各的，也能把别人的公开收藏夹接进来。",
     "main": "index.cjs",
