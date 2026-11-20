@@ -2,9 +2,12 @@
 
 [![CI](https://github.com/qingxian997/folia-bilibili-source/actions/workflows/ci.yml/badge.svg)](https://github.com/qingxian997/folia-bilibili-source/actions/workflows/ci.yml)
 
-把 bilibili 当成 [Folia](https://github.com/chthollyphile/folia-major) 里的一个普通音源：收藏夹变成「歌单」页签上的卡片，UP 主的合集会出现在「专辑」里，探索页能一直往下刷首页推荐，歌词直接取视频的 CC 字幕。
+把 bilibili 当成 [Folia](https://github.com/chthollyphile/folia-major) 里的一个普通音源：收藏夹变成「歌单」页签上的卡片，UP 主的合集会出现在「专辑」里，探索页用宿主自带的翻页和「换一批」，歌词直接取视频的 CC 字幕。
 
 界面全部由 Folia 自己画，这个模组只提供数据。
+
+> [!NOTE]
+> **这个模组只是视频音源**：把公开视频的声音、字幕和曲库信息整理成 Folia 认识的形状。它不碰番剧、电影，也不接管或替换 Folia 的视频播放功能 —— 界面和交互都遵循 Folia 的设计原则，你看到的就是一个普通的 Folia 音源。
 
 > [!WARNING]
 > **这是预览版，不是正式版。**
@@ -18,12 +21,12 @@
 >
 > 现在能用，能长期自己用，但别拿它当基础设施。
 
-**[下载最新预览版](https://github.com/qingxian997/folia-bilibili-source/releases)** —— 下 `bili-fav-wall-0.9.1.zip`，装法见下面的[快速开始](#快速开始)。源码包在同一个页面。
+**[下载最新预览版](https://github.com/qingxian997/folia-bilibili-source/releases)** —— 下 `bili-fav-wall-0.9.2.zip`，装法见下面的[快速开始](#快速开始)。源码包在同一个页面。
 
 | | |
 | --- | --- |
-| 宿主 | Folia 0.7.22 ~ 0.7.x（Folium 1.7 / 1.8） |
-| 模组版本 | 0.9.1（预览） |
+| 宿主 | Folia 0.7.22 ~ 0.7.x（Folium 1.7 / 1.8）；**本版本针对 Folia 0.7.29 验证** |
+| 模组版本 | 0.9.2（预览） |
 | 许可证 | MIT |
 | 官方市场 | 不上架 |
 
@@ -34,7 +37,7 @@
 - **真·原生音源**：界面、方墙、翻牌、队列、方向键全是 Folia 自己画的，模组只喂数据 —— 所以它长得和别的音源一模一样，不会突然多一层自绘的墙。
 - **收藏夹进书库**：我建的、我收藏的、别人的公开收藏夹，都变成书库里的卡片，点开就是歌。
 - **合集与系列**：UP 主的合集和系列进「合集」页签，选中 bilibili 时胶囊会自动改名。
-- **探索页刷不完**：首页推荐做成一整面瀑布墙，往下滚会一直补，不会停在 96 首。
+- **探索页用宿主原生体验**：首页推荐做成一整面瀑布墙，往下滚由宿主翻页，点「换一批」换一批推荐（会避开你最近听过的）。
 - **点心形就收藏**：播放器上的心形按钮直接写回 bilibili 的收藏夹，收进哪个夹子由你指定。
 - **两种歌词**：优先取视频自带的 CC 字幕，没有就按标题去别的平台匹配；顺序可调，也可以全关。
 - **能筛选**：收藏夹和合集各管各的，黑名单 / 白名单两种玩法，也支持长视频自动跳过。
@@ -45,7 +48,7 @@
 | 我建的 / 我收藏的收藏夹 | 书库 →「歌单」页签，一格一个夹子 |
 | 别人的公开收藏夹 | 设置里贴链接，进「歌单」页签 |
 | UP 主合集、系列 | 设置里贴链接，进「专辑」页签（选中 bilibili 时叫「合集」） |
-| 首页推荐（无限刷） | 书库 →「探索」页签，往下滚滚不完 |
+| 首页推荐 | 书库 →「探索」页签，往下滚翻页，点「换一批」换一批 |
 | 点心形收进收藏夹 | 播放器上的心形按钮，收进你指定的那个夹子 |
 | 歌词 | 视频自带的中文字幕，或者按标题去别的平台匹配 |
 
@@ -67,7 +70,7 @@
 
 ### 安装
 
-1. 在 [Releases](https://github.com/qingxian997/folia-bilibili-source/releases) 下载 `bili-fav-wall-0.9.1.zip`。
+1. 在 [Releases](https://github.com/qingxian997/folia-bilibili-source/releases) 下载 `bili-fav-wall-0.9.2.zip`。
 2. 解压到 Folia 的模组目录，文件夹名叫 `bili-fav-wall`：
 
    ```
@@ -146,10 +149,10 @@
 
 - **依赖实验接口**：宿主更新后可能整块失效，等适配。
 - **搜索给的是视频**，不是音乐。所以标题会带「【】」「4K」「MV」这类字样，模组会尽量洗干净，但洗不干净的情况有。
-- **探索页只有 bilibili 首页推荐**，没有「每日推荐」「私人 FM」这类东西 —— 那些接口没有。
+- **探索页只有 bilibili 首页推荐**，没有「每日推荐」「私人 FM」这类东西 —— 那些接口没有。翻页与「换一批」用的是 Folia 0.7.29 原生的探索页控件；更早的宿主上没有「换一批」按钮。
 - **心形按钮只对纯数字 id 的自建收藏夹生效**，公开收藏夹是只读的。
 - **封面靠猜**：bilibili 的收藏夹接口不返回封面，模组拿夹子里第一条视频的封面顶上，所以有的夹子封面会和内容不完全对。
-- **会被限流**：短时间内反复刷墙、连续狂滚探索页，可能触发 bilibili 的 412，表现为转圈或空白。停下来等几分钟就好，不是坏了。
+- **会被限流**：短时间内反复刷墙、频繁点「换一批」，可能触发 bilibili 的 412，表现为转圈或封面空白。停下来等几分钟就好，不是坏了；封面被挡一下也不会再空白五分钟。
 - **只支持 Windows 上验证过的 Folia**，其它平台没测。
 
 ## 常见问题
@@ -207,7 +210,7 @@
 ## 免责声明
 
 - 这不是 bilibili 官方项目，和 bilibili 没有任何关系，也没有得到官方授权。
-- 这个模组只做「把公开数据整理成 Folia 认识的形状」：搜索、读收藏夹、播视频自带的声音、取视频自带的字幕。**不提供下载，不破解付费或会员内容**，能不能播取决于你的账号和 bilibili 自己的规则。
+- 这个模组只做「把公开数据整理成 Folia 认识的形状」：搜索、读收藏夹、播视频自带的声音、取视频自带的字幕。**不提供下载，不破解付费或会员内容**，能不能播取决于你的账号和 bilibili 自己的规则。它只是视频音源，不碰番剧、电影，也不替代 Folia 的视频播放。
 - 登录凭据只存在本机，由 Folia 加密保管，模组不上传任何数据。但仍然要提醒：**用第三方客户端访问账号，风险由你自己承担**。
 - 请遵守 bilibili 的用户协议和当地法律。如果官方提出异议，这个项目会随时停止维护或删除仓库。
 
@@ -215,78 +218,10 @@
 
 # 给开发者
 
-改动之前先读 [docs/HOST-CONTRACT.md](docs/HOST-CONTRACT.md)：那里面写了宿主的契约、踩过的坑、以及为什么有些写法不能动。
+改动之前先读 [docs/HOST-CONTRACT.md](docs/HOST-CONTRACT.md)：宿主契约、踩过的坑、哪些写法不能动都在那里；版本变化写在 [docs/CHANGELOG.md](docs/CHANGELOG.md)。部署流程见 [CONTRIBUTING.md](CONTRIBUTING.md)。
 
-## 目录
+- 跑测试：`npm install && npm test && npm run check`（Node 22.19+，248 个用例，不需要 Folia 也不联网；`check` 会校验 `mod.json.version` 与 `client.mjs` 里的 `MOD_VERSION` 一致）。
+- 打包：`python scripts/pack.py`（版本号读 `mod.json`），产物在 `dist/`，两个包的 sha256 贴进 Release。
+- 发版：改 `mod.json`、`client.mjs` 的 `MOD_VERSION`、`package.json` 三处版本号 → CHANGELOG 加一段 → 测试全绿 → 打包 → GitHub Release 勾 **pre-release**（1.0 之前一直如此）。
 
-```
-mod.json              清单：id / 版本 / 入口 / 权限 / 宿主版本范围
-index.cjs             主进程：所有 bilibili 请求、Cookie、音频中转
-client.mjs            渲染进程：provider、曲库、探索、歌词、音质
-lib/                  两边共用的小模块（纯函数优先）
-vendor/qrcode.mjs     扫码用的二维码生成（MIT，附许可证）
-test/                 node:test 单测，不需要 Folia 就能跑
-docs/                 CHANGELOG、宿主契约、截图
-```
-
-`client.mjs` 里只剩接线：设置面板本体在 `lib/settingsPanel.mjs`（约 950 行，只认 `deps` 传进来的依赖）。
-
-## 跑测试
-
-```bash
-npm install       # 只装 jsdom，测试用（需要 Node 22.19 以上）
-npm test          # 251 个用例
-npm run check     # 校验 mod.json（字段白名单、权限、版本一致性）
-```
-
-测试不用 Folia，也不联网：所有 RPC 和 DOM 都是桩。当前 251 个用例（248 通过 / 3 跳过）。
-
-## 打包
-
-```bash
-python scripts/pack.py          # 版本号读 mod.json
-python scripts/pack.py 0.9.1    # 临时用别的版本号
-```
-
-产物在 `dist/`：`bili-fav-wall-0.9.1.zip`（只含运行需要的文件，解压即用）和 `-source.zip`（多带 `test/`、`docs/`、`scripts/`）。
-zip 条目必须是正斜杠，脚本会自己校验；`mod.json` 必须在根目录；两个包的 sha256 会打在输出里，贴进 Release 说明即可。
-
-## 宿主契约（要点）
-
-- **`mod.json` 的字段是白名单**：只允许 `folium / id / name / version / author / description / main / client / depends / permissions / experimental / embedOrigins / folia / preview`。写别的（比如 `homepage`、`repository`）在 Folium 2 里会直接报错。
-- **`version` 必须三段数字**（`0.9.0`），`0.9.0-preview` 会校验失败。预览状态只能靠 GitHub 的 pre-release 和 README 表达。
-- **权限要真的用**：`filesystem.data`（存 Cookie 和缓存）、`playback.control`（放歌）。少一个会被门禁拦，多一个只是让用户在信任弹窗里多看一眼，所以别乱写。
-- **`experimental: ["omni.providers"]`** 是音源注册的入口，也是这个模组最脆弱的地方。
-- **`folia` 范围**：`>=0.7.22 <0.8.0`。0.8.0 就是 Folium 2，到那时要重新适配、重新发一个正式版。
-
-细节、踩坑和反例在 [docs/HOST-CONTRACT.md](docs/HOST-CONTRACT.md)。
-
-## 跟着宿主升级
-
-宿主每次改版，前端 chunk 的哈希会变，内部函数名也会变。升级后按这个顺序过一遍：
-
-1. 用 asar 扫描脚本确认用到的 DOM 选择器和 store 还在（`data-bravais-tab`、`lattice-field`、`loadMoreOf`）。
-2. 装一份新宿主，开 `--remote-debugging-port=9222`，用 CDP 打开设置面板核对字段，看有没有红字报错。
-3. 真机走一遍：收藏页 / 专辑页 / 探索页 / 播放 / 歌词 / 扫码。
-4. 改完重新打包，写 CHANGELOG。
-
-改过的文件会改变目录摘要，宿主的信任记录会失效并显示「需要重新确认」，这是正常的。
-
-## 发版
-
-1. 改 `mod.json` 的 `version` 和 `client.mjs` 里的 `MOD_VERSION`（两处必须一致）。
-2. 在 `docs/CHANGELOG.md` 顶部加一段。
-3. `npm test` 全绿。
-4. 打包，算 SHA256，附在 Release 说明里。
-5. GitHub Release 勾上 **pre-release**（在 1.0 之前一直如此）。
-
-## 代码约定
-
-- 文案面向普通用户：一条只说「动了会怎样」「什么时候该动」，不写接口路径、不写进程名。
-- 新逻辑优先写成 `lib/` 里的纯函数，带单测；`client.mjs` 只留接线。
-- 所有延迟执行走 `later()`，停用时要能一把清掉；定时器和监听器都要有对应的清理。
-- 缓存必须有上限。主进程的短期记忆见 `lib/memoCache.cjs`，客户端各张表都在写入处裁剪。
-
-## 许可证
-
-[MIT](LICENSE)。内置的二维码生成来自 [qrcode](https://github.com/soldair/node-qrcode)，同样是 MIT。
+[许可证](LICENSE)：MIT。内置二维码生成来自 [qrcode](https://github.com/soldair/node-qrcode)，同样是 MIT。

@@ -4,26 +4,10 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
-import { attachLibrary, canMutateOwnCollection, openHostLibrary, findExploreStore } from '../lib/hostlib.mjs';
+import { attachLibrary, canMutateOwnCollection, openHostLibrary } from '../lib/hostlib.mjs';
 
 test('没有 DOM（Node）时打开宿主库返回 null，不抛错', async () => {
     assert.equal(await openHostLibrary(), null);
-});
-
-test('0.8.1：按行为认出宿主探索页 store，认错的一律跳过', () => {
-    const state = {
-        show: () => {}, refresh: () => {}, loadMore: async () => {}, loadMoreOf: async () => {},
-    };
-    const store = { getState: () => state };
-    const module = {
-        randomStore: { getState: () => ({ play: () => {} }) },
-        brokenStore: { getState: () => { throw new Error('not ready'); } },
-        exploreStore: store,
-        number: 42,
-    };
-    assert.equal(findExploreStore(module), store);
-    assert.equal(findExploreStore({ randomStore: module.randomStore }), null);
-    assert.equal(findExploreStore(null), null);
 });
 
 test('补齐能力位：auth / userLibrary / playlists 三个开关决定宿主画不画墙', () => {
@@ -206,10 +190,11 @@ test('0.8.0 推荐页：能力位和方法一起挂上，宿主 getHomeFeed 才�
     assert.equal(plain.recommendations, undefined);
 });
 
-test('0.8.0 探索页：capabilities.explore 与两个取数方法必须同时挂上', () => {
-    const getFeed = async () => ({ sections: [] });
+test('0.7.29 探索页：capabilities.explore 与取数方法、songsShownAs 都要透传', async () => {
+    const getFeed = async (cursor, recentSongs) => ({ sections: [], cursor, recentSongs });
     const getSectionItems = async () => ({ items: [] });
-    const explore = { getFeed, getSectionItems };
+    const songsShownAs = (songs) => songs;
+    const explore = { getFeed, getSectionItems, songsShownAs };
     const provider = { id: 'x', capabilities: {} };
     const ok = attachLibrary(provider, {
         auth: {}, library: {}, catalog: {}, explore,
@@ -219,10 +204,15 @@ test('0.8.0 探索页：capabilities.explore 与两个取数方法必须同时�
     assert.equal(provider.explore, explore);
     assert.equal(provider.explore.getFeed, getFeed);
     assert.equal(provider.explore.getSectionItems, getSectionItems);
+    assert.equal(provider.explore.songsShownAs, songsShownAs, '宿主用它在换一批时映射最近播放');
 
     // 没给实现就别点亮页签，否则点进去永远空白
     const plain = { id: 'y', capabilities: {} };
     attachLibrary(plain, { auth: {}, library: {}, catalog: {} });
     assert.equal(plain.capabilities.explore, undefined);
     assert.equal(plain.explore, undefined);
+
+    // 0.7.29 契约：getFeed 收得到第二参（最近播放的种子）
+    const answer = await getFeed('bili:feed:1', ['BV1']);
+    assert.deepEqual(answer.recentSongs, ['BV1']);
 });

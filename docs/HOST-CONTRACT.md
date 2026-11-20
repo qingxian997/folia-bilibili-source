@@ -466,16 +466,45 @@ bilibili Web 端**没有**「按关键词搜别人的收藏夹」这种搜索类
 模组确实实现了 `searchAlbums()`，所以这一位可以诚实打开。
 `capabilities.recommendations` 在 0.7.8 起打开（首页推荐 feed 是真实存在的，早先那句
 「bilibili 没有推荐 feed」是判断失误）；`capabilities.explore` 在 0.8.0 起打开——
-宿主「探索」页签是唯一能原生画「歌曲卡」的地方，点一下直接播、滚到底自动续读。
+宿主「探索」页签是唯一能原生画「歌曲卡」的地方，点一下直接播。
 
-## 代码结构与边界（0.9.0）
+## 探索页与 0.7.29 的「换一批」（0.9.2）
+
+0.7.29 的宿主（`remoteActions-*.js` / `omni-*.js`，chunk 哈希随版本变，**不要写死文件名**）
+给 explore 契约加了两个东西：
+
+```
+getExploreFeed(cursor, recentSongs)   // 第二参是「最近播放的歌」，≤30 首，刷新时才有
+getExploreSectionItems(cursor)        // 不变
+songsShownAs(songs)                   // 可选：把「听过的歌」映射成「展示的歌」
+```
+
+「换一批」按钮走 `store.refresh(seed)`：`seed` 是宿主从最近播放 / 重复播放里挑的歌（≤30），
+经 `omni.getExploreFeed(undefined, seed)` 透传进来。**cursor 有值时不会带 seed**，
+也就是说 seed 只属于「换一批」，普通翻页不要按它过滤。
+
+- `feedAnswer()` 声明 `refreshReadsAnew:true`（开关 `lib/explore.mjs` 的 `REFRESH_READS_ANEW`）。
+  宿主刷新时看到这一位才跳过逐 section 的 `getExploreSectionItems()` 追加、直接带 seed 来读新 feed；
+  不声明时 seed 会被追加路径吃掉。0.8.1 曾因这个标记回放旧池，但那是 0.7.26/0.7.27 的旧逻辑；
+  0.7.29 的 `El()` 已改，配合恒定且非空的 section title（宿主按 title 匹配新旧 section），
+  新池能正确替换旧池。真机若仍回放，`REFRESH_READS_ANEW` 改成 `false` 即可回退。
+- `getFeed` 取数时避开 seed 的 id（`song.id` / `sourceRef.mediaId`，兼容光字符串），
+  最多多取 3 批、凑够约 12 首；`fresh_idx` 单调往前推是「不回放旧池」的第二重保险。
+- `songsShownAs(songs)` **必须返回 `Map<id, song>`**，不是数组。宿主 `Bn()` 拿到后调 `.size/.get/.has`，
+  返回数组会报 `a.get is not a function`，最近播放就登记不上、seed 永远为空。我们展示即播放：
+  把每首按 `id / sourceRef.mediaId` 建进 Map 即可（与内置 YTM provider 的形状一致）。
+  `Wl()` 只在 `exploreSongsShownAs` 存在时才登记最近播放，所以这个钩子必须实现。
+- 翻页上限（一次 read 最多 1 初始 + 4 批 / 96 首）由宿主 `useExploreWall` 负责。
+  模组不再拿 explore store 自己 `loadMore()` 续命 —— 那套滚轮驱动的逻辑在 0.7.29 已移除。
+
+## 代码结构与边界（0.9.0，0.9.2 微调）
 
 | 位置 | 职责 | 不该做什么 |
 | --- | --- | --- |
 | `index.cjs` | 所有 bilibili 请求、Cookie、WBI 签名、音频中转、RPC 出口 | 不碰 DOM，不假定窗口存在 |
-| `client.mjs` | provider 注册、曲库交给宿主、探索续读、歌词、音质、DOM 改名 | 不直接联网，一律走 `rpc()` |
+| `client.mjs` | provider 注册、曲库交给宿主、探索取数、歌词、音质、DOM 改名 | 不直接联网，一律走 `rpc()` |
 | `lib/settingsPanel.mjs` | 自绘设置面板（四组、选择器、扫码、维护） | 不读 client 内部变量，只用 `deps` |
-| `lib/hostlib.mjs` | 按行为找宿主的 provider / explore store | 不写死 chunk 名，宿主改版就失效 |
+| `lib/hostlib.mjs` | 按行为找宿主的 provider / 音源注册表 | 不写死 chunk 名，宿主改版就失效 |
 | `lib/*.mjs` 其它 | 纯函数：标题清洗、歌词转换、排除规则、额外列表… | 不带副作用，方便单测 |
 | `vendor/qrcode.mjs` | 二维码生成 | 不改成动不了的原样，附许可证 |
 

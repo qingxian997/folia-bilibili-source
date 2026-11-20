@@ -41,7 +41,7 @@ const makeApi = () => {
 test('主进程入口注册全部 rpc 处理函数，并返回清理函数', () => {
     const { api, handlers } = makeApi();
     const dispose = activate(api);
-    for (const name of ['status', 'qr.generate', 'qr.poll', 'logout', 'setCookie', 'folders', 'folderItems', 'search', 'song', 'subtitles', 'audio', 'clearCache', 'favDeal', 'likedIds', 'extras', 'extraItems']) {
+    for (const name of ['status', 'qr.generate', 'qr.poll', 'logout', 'setCookie', 'folders', 'folderAll', 'folderItems', 'search', 'song', 'subtitles', 'audio', 'clearCache', 'favDeal', 'likedIds', 'extras', 'extraItems', 'collected', 'matchFolders', 'recommend', 'covers', 'fillCovers', 'folderCover']) {
         assert.equal(typeof handlers[name], 'function', name);
     }
     assert.equal(typeof dispose, 'function');

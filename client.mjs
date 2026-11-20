@@ -37,9 +37,8 @@ import {
     parseRecoKey, recoTrackRaw, isLikedKey, likedCollection,
 } from './lib/recommend.mjs';
 import {
-    parseExploreCursor, exploreSection, feedAnswer, sectionAnswer,
+    parseExploreCursor, exploreSection, feedAnswer, sectionAnswer, recentSongIds,
 } from './lib/explore.mjs';
-import { canAppend, wheelDeltaPx, MAX_STEP_PX, SETTLE_MS } from './lib/exploreContinuation.mjs';
 import {
     searchCollectionPage, remoteSeasonRaw, remoteSeasonFromKey, hasLocalNameHit,
 } from './lib/searchCollections.mjs';
@@ -52,7 +51,7 @@ const HOST_LYRIC_ORDER = ['netease', 'qq', 'kugou'];
 /** 宿主用它画音源徽标：bilibili 的粉。 */
 const BILI_PINK = '#FB7299';
 /** 面板上显示的版本号，和 mod.json 保持一致（打包校验会盯这一条）。 */
-const MOD_VERSION = '0.9.1';
+const MOD_VERSION = '0.9.2';
 /** 批量改收藏夹时每首之间的间隔：fav/resource/deal 连发几十个必吃 -412。 */
 const ADD_INTERVAL_MS = 250;
 
@@ -1630,14 +1629,26 @@ export default function activate(folium) {
 
     // ------------------------------------------------------- 宿主的曲库接口
 
-    /** 读一次封面缓存（只有本地存过的，不联网）。 */
-    async function loadCovers() {
+    /**
+     * 读一次封面缓存（只有本地存过的，不联网）。
+     *
+     * 0.9.2：补封面要串行好几十秒，期间登录 / 设置面板也会来读一次缓存。以前两处
+     * 直接覆盖 `covers`，一份不含新封面的旧快照会把刚补好的结果抹掉 —— 表现就是
+     * 「封面闪一下又没了」。现在用 epoch 挡住过期结果，并把新旧结果合并而不是替换。
+     */
+    let coverEpoch = 0;
+    async function loadCovers(reset = false) {
+        const epoch = ++coverEpoch;
+        let value = {};
         try {
             const answer = await rpc('covers');
-            return (answer && answer.covers) || {};
+            value = (answer && answer.covers) || {};
         } catch {
-            return {};
+            /* 读不到就当没有 */
         }
+        if (epoch !== coverEpoch || disposed) return covers;
+        covers = reset ? value : { ...covers, ...value };
+        return covers;
     }
 
     // ------------------------------------- 「我收藏的」+ 三个来源的合流
@@ -1951,18 +1962,14 @@ export default function activate(folium) {
     }
 
     // ------------------------------------------------ 探索页：歌曲瀑布流
-    // 宿主 useExploreWall 的 nu() 写死「一次 read 最多自动续读 4 批 / 96 首」，之后靠
-    // 每区「更多」(moreCursor)、顶部「换一批」(refresh)，以及本模组下面的「自动续命」
-    // 继续往下刷。我们只负责按 fresh_idx 不停给新的歌：
-    //   * 0.8.1 删掉了 400 回绕（实测 fresh_idx=2001 仍正常给 30 首、零重复），
-    //     那才是「刷久了整批重来」的真凶；
-    //   * 按用户选择「照原样显示」，模组侧不再做全局去重，宿主自己在 section pool
-    //     里用 fl() / xl() 去重；
-    //   * feedAnswer() 不再带 refreshReadsAnew，否则「换一批」会重放旧池子。
-    // 0.9.1：每批从 30 降到 18。宿主每追加一次就重排整面 transform 墙，
-    // 实测一次 55~155ms（27 张卡），掉帧全落在这一刻。批量小了单次重排更轻，
-    // 代价是同样的滚动距离内批次数多一点 —— 但人感知的是单次卡顿的长度，不是次数。
-    // bilibili 的 fresh_idx 没有上界，18 一首不少。
+    // 0.7.29 起探索页完全交给宿主：往下滚由宿主原生 loadMore 续读，换一批由宿主
+    // 顶部的按钮触发 store.refresh(seed)。模组只按 fresh_idx 给新的歌，不再自己
+    // 监听滚轮续命 —— 那套「随着用户操作而刷新」的逻辑已经不符合宿主的操作逻辑。
+    //   * 换一批时宿主把最近播放的歌当第二参传进来，我们在取数时避开它们；
+    //   * fresh_idx 无上界（实测 2001 仍正常给 30 首），删掉了 400 回绕，那才是
+    //     「刷久了整批重来」的真凶；
+    //   * 模组侧不做全局去重，宿主自己在 section pool 里用 fl() / xl() 去重。
+    // 0.9.1：每批从 30 降到 18，一次重排的卡顿更短。bilibili 的 fresh_idx 没有上界。
     const EXPLORE_PAGE = 18;
     let exploreNextIdx = 1;
     const exploreFlights = new Map();
@@ -2002,12 +2009,58 @@ export default function activate(folium) {
         return task;
     }
 
-    async function getExploreFeed(cursor) {
+    /** 只给真机核验读：记下最近一次喂给宿主的探索 feed 和种子情况。 */
+    function noteExploreFeed(answer, seedCount, filtered) {
+        try {
+            if (typeof window !== 'undefined' && window.__bili081) {
+                window.__bili081.lastFeed = {
+                    at: Date.now(),
+                    sections: answer.sections.length,
+                    songs: answer.sections.reduce((n, section) => n + ((section.items || []).length), 0),
+                    refreshReadsAnew: Boolean(answer.refreshReadsAnew),
+                    seed: seedCount,
+                    filtered,
+                    nextCursor: answer.nextCursor,
+                };
+            }
+        } catch { /* 诊断不该影响功能 */ }
+    }
+
+    async function getExploreFeed(cursor, recentSongs) {
         const parsed = parseExploreCursor(cursor);
+        // 刷新（换一批）：宿主传 undefined cursor + 最近播放的种子。多取几批、避开
+        // 种子里的歌；fresh_idx 单调往前推，是「不回放旧池」的第二重保险。
+        if (!parsed) {
+            const recent = recentSongIds(recentSongs);
+            if (recent.size) {
+                const startIdx = Math.max(exploreNextIdx, 1);
+                let idx = startIdx;
+                let picked = [];
+                for (let attempt = 0; attempt < 3 && picked.length < 12; attempt += 1) {
+                    const batch = await exploreBatch(idx);
+                    exploreNextIdx = Math.max(exploreNextIdx, batch.nextIdx);
+                    const fresh = batch.songs.filter((song) => !recent.has(String(song.id || '')));
+                    picked = picked.concat(fresh);
+                    idx = Math.max(batch.nextIdx, idx + EXPLORE_PAGE);
+                }
+                exploreNextIdx = Math.max(exploreNextIdx, idx);
+                // 极端情况下种子把几批全命中了：宁可用原批次，也别交一个空 feed 让宿主当没内容。
+                if (!picked.length) {
+                    const batch = await exploreBatch(exploreNextIdx);
+                    exploreNextIdx = Math.max(exploreNextIdx, batch.nextIdx);
+                    picked = batch.songs;
+                }
+                const answer = feedAnswer(exploreSection(startIdx, exploreNextIdx, picked), exploreNextIdx);
+                noteExploreFeed(answer, recent.size, true);
+                return answer;
+            }
+        }
         const idx = parsed || exploreNextIdx;
         const batch = await exploreBatch(idx);
         exploreNextIdx = Math.max(exploreNextIdx, batch.nextIdx);
-        return feedAnswer(exploreSection(idx, batch.nextIdx, batch.songs), batch.nextIdx);
+        const answer = feedAnswer(exploreSection(idx, batch.nextIdx, batch.songs), batch.nextIdx);
+        noteExploreFeed(answer, 0, false);
+        return answer;
     }
 
     async function getExploreSectionItems(cursor) {
@@ -2029,8 +2082,10 @@ export default function activate(folium) {
         coverFill = (async () => {
             try {
                 const answer = await rpc('fillCovers', { ids: missing });
+                // 补完让 epoch 作废：期间若有人读过缓存，它那份旧快照不再作数；合并保留新封面。
+                coverEpoch += 1;
                 if (answer && answer.covers) {
-                    covers = answer.covers;
+                    covers = { ...covers, ...answer.covers };
                     await refreshWall();
                 }
             } catch (error) {
@@ -2395,8 +2450,6 @@ export default function activate(folium) {
     // ------------------------------------------------- 把曲库交给宿主
 
     const hostRef = { value: null };
-    /** 0.8.1：宿主探索页那张 zustand store，用来在 96 首上限之后继续追加新歌。 */
-    const exploreStoreRef = { value: null };
     /** 宿主重读一次这个源：墙面跟着账户数据重画。 */
     async function refreshWall() {
         if (disposed) return;
@@ -2436,258 +2489,6 @@ export default function activate(folium) {
         }, delay);
     }
 
-    // ------------------------------------------- 0.8.2：探索页 96 首之后按需续命
-    // 宿主 useExploreWall 的 nu() 写死「e.nextCursor && t<96 && n<4」——一次 read
-    // 最多自动续读 4 批 / 96 首；到顶之后书库墙按取模循环铺同一批 tile。
-    // 模组改不了宿主 chunk，但能拿到同一张 explore store，在宿主停手后自己调
-    // loadMore() 追加新 section：不重置滚动、不新增页签、不改卡片样式。
-    //
-    // **P0（0.8.2）**：0.8.1 用 600ms 定时轮询 + 「最近 4.5s 有过任意
-    // wheel / scroll / touchmove / keydown」当「用户还在刷」的信号，而宿主
-    // loadMore() 重排整面墙派发的 scroll 会反过来把这个时间戳续上，形成自激：
-    // 随便动一下就唤醒，之后每 1.8s 整页重绘一次，停不下来。
-    // 现在改成纯事件驱动，判定全在 lib/exploreContinuation.mjs 的纯函数里：
-    // 唯一的「进度」是用户**向下滚动的累计像素**，不足 600px 一律不补。
-    // 真机实测宿主探索墙是 `lattice-field{overflow:clip}` + `lattice-world
-    // {transform:matrix(...)}` 的 transform 虚拟墙，滚轮时**不派发原生 scroll**、
-    // scrollTop 恒为 0，所以 wheel 的 deltaY 是主要进度来源（也兼容真会滚的版本）。
-    // wheel 只由真实输入产生，宿主重排不会派发它 —— 自激从根上断开。
-    // 不再有定时器、不监听 keydown / click，也不设总批数上限。
-    const EXPLORE_STALL_LIMIT = 3;
-    const EXPLORE_SCROLL_SETTLE_MS = 90;
-    const EXPLORE_INPUT_EVENTS = ['wheel', 'scroll', 'touchmove'];
-    let exploreLastAppendAt = 0;
-    /** 自上次补批以来累计的向下滚动像素；补批后清零，离开探索页也清零。 */
-    let exploreAdvance = 0;
-    /** 原生滚动路径下上一次看到的 scrollTop，用来只累计「前进」的部分。 */
-    let exploreLastObservedTop = null;
-    let exploreTouchY = null;
-    /** 累计补了多少批，只给诊断现场看；**不做上限**。 */
-    let exploreForcedCount = 0;
-    let exploreLastCursor = null;
-    let exploreStallCount = 0;
-    let exploreLoading = false;
-    let exploreWatchOn = false;
-    let exploreWatchDoc = null;
-    let exploreScrollQueued = false;
-    let exploreLastReason = '';
-    /** 最后一次真实滚动输入的时刻：补批要等它过去 SETTLE_MS，把重排挪到停下之后。 */
-    let exploreLastInputAt = 0;
-    /** 「停下来再补」的兜底定时器：滚动结束不会再有事件，得自己醒一次。 */
-    let exploreSettleTimer = 0;
-
-    function currentHomeTab() {
-        try {
-            return String(localStorage.getItem('last_home_view_tab') || '');
-        } catch {
-            return '';
-        }
-    }
-
-    function exploreVisible() {
-        const doc = typeof document !== 'undefined' ? document : null;
-        if (!doc) return false;
-        // 窗口不可见、或者盖着模态对话框时，任何滚动都不算「在刷探索页」。
-        try {
-            if (doc.visibilityState && doc.visibilityState !== 'visible') return false;
-            if (doc.querySelector('[role="dialog"][aria-modal="true"], dialog[open]')) return false;
-        } catch {
-            /* 宿主版本变了就只按下面的页签判定 */
-        }
-        if (currentHomeTab() === 'explore') return true;
-        try {
-            return Boolean(doc.querySelector('[data-explore-surface]')
-                || doc.querySelector('button[data-bravais-tab="explore"][aria-selected="true"]'));
-        } catch {
-            return false;
-        }
-    }
-
-    /** 设置面板 / 搜索框 / 弹层里的滚动不算数。 */
-    function blockedScrollTarget(target) {
-        if (!target || typeof target.closest !== 'function') return false;
-        try {
-            return Boolean(target.closest(
-                'input, textarea, [contenteditable="true"], [role="dialog"], [aria-modal="true"],'
-                + ' [class*="settings"], [class*="search-"], [class*="modal"]'));
-        } catch {
-            return false;
-        }
-    }
-
-    /** 原生 scroll 在 capture 阶段会经过 document；只取 scrollTop 的前进量。 */
-    function scrollTopOf(event) {
-        const raw = event && event.target;
-        const doc = typeof document !== 'undefined' ? document : null;
-        let el = raw;
-        if (raw && raw.nodeType === 9) el = raw.scrollingElement || raw.documentElement;
-        else if (typeof window !== 'undefined' && raw === window) el = doc && doc.scrollingElement;
-        return el && typeof el.scrollTop === 'number' ? el.scrollTop : null;
-    }
-
-    function feedSnapshot(feed) {
-        if (!feed) return null;
-        const sections = Array.isArray(feed.sections) ? feed.sections : [];
-        return {
-            status: feed.status,
-            loadingMore: Boolean(feed.loadingMore),
-            refreshing: Boolean(feed.refreshing),
-            moreFailed: Boolean(feed.moreFailed),
-            nextCursor: feed.nextCursor,
-            pages: Number(feed.pages) || 1,
-            total: sections.reduce((sum, section) => sum
-                + ((section && section.items && section.items.length) || 0), 0),
-        };
-    }
-
-    /** 把一个真实输入事件折算成「向下滚动的距离」。宿主重排不会产生这些事件。 */
-    function progressOf(event) {
-        const type = event && event.type;
-        if (type === 'wheel') {
-            const vh = (typeof window !== 'undefined' && window.innerHeight) || 800;
-            return wheelDeltaPx(event.deltaY, event.deltaMode, vh);
-        }
-        if (type === 'scroll') {
-            const top = scrollTopOf(event);
-            if (top == null) return 0;
-            const delta = exploreLastObservedTop == null ? 0 : top - exploreLastObservedTop;
-            exploreLastObservedTop = top;
-            return delta > 0 ? Math.min(delta, MAX_STEP_PX) : 0;
-        }
-        if (type === 'touchmove') {
-            const touch = event.touches && event.touches[0];
-            if (!touch) return 0;
-            const y = touch.clientY;
-            const delta = exploreTouchY == null ? 0 : exploreTouchY - y;
-            exploreTouchY = y;
-            return delta > 0 ? Math.min(delta, MAX_STEP_PX) : 0;
-        }
-        return 0;
-    }
-
-    function onExploreProgress(event) {
-        if (disposed || !exploreWatchOn) return;
-        if (blockedScrollTarget(event && event.target)) return;
-        // 任何真实滚动输入都记时间戳：补批要等手指离开再动手。
-        exploreLastInputAt = Date.now();
-        const gained = progressOf(event);
-        // 向上滚、宿主重排自派的 scroll（scrollTop 恒 0）都是 0，直接不排队。
-        if (!(gained > 0)) return;
-        exploreAdvance += gained;
-        if (exploreScrollQueued) return;
-        exploreScrollQueued = true;
-        const id = later(() => {
-            exploreScrollQueued = false;
-            appendIfNeeded();
-        }, EXPLORE_SCROLL_SETTLE_MS);
-        if (!id) exploreScrollQueued = false;
-    }
-
-    function appendIfNeeded() {
-        if (disposed || !exploreWatchOn) return;
-        const store = exploreStoreRef.value;
-        if (!store) return;
-        const active = isBiliActive();
-        const visible = exploreVisible();
-        if (!visible) {
-            // 不在探索页（或盖着模态）：累计量作废，回来要重新滚。
-            exploreAdvance = 0;
-            exploreLastObservedTop = null;
-            exploreTouchY = null;
-            return;
-        }
-        let state = null;
-        try {
-            state = store.getState();
-        } catch {
-            return;
-        }
-        const now = Date.now();
-        const verdict = canAppend({
-            active,
-            visible,
-            blocked: false,
-            inFlight: exploreLoading,
-            feed: feedSnapshot(state && state.feed),
-            now,
-            lastAppendAt: exploreLastAppendAt,
-            advance: exploreAdvance,
-            sinceInput: exploreLastInputAt ? now - exploreLastInputAt : Infinity,
-        });
-        exploreLastReason = verdict.reason;
-        if (!verdict.ok) {
-            // 用户还在滑：推迟到手指离开。滚动一停就不再派发事件，得自己排一次重试，
-            // 否则最后那 600px 永远等不到补批。只留一个定时器，不叠。
-            if (verdict.reason === 'still-scrolling' && !exploreSettleTimer) {
-                exploreSettleTimer = later(() => {
-                    exploreSettleTimer = 0;
-                    appendIfNeeded();
-                }, SETTLE_MS + 40);
-            }
-            return;
-        }
-
-        // 万一宿主版本变了、loadMore 不再推进游标，连续几次没进展就安静放弃。
-        const feed = state && state.feed;
-        const cursor = feed && feed.nextCursor;
-        if (exploreLastCursor === cursor) {
-            exploreStallCount += 1;
-            if (exploreStallCount >= EXPLORE_STALL_LIMIT) return;
-        } else {
-            exploreLastCursor = cursor;
-            exploreStallCount = 0;
-        }
-        // 进度清零：必须再真往下滚一段才补下一批，狂滚也只按 QUIET_MS 限速。
-        exploreAdvance = 0;
-        exploreLoading = true;
-        exploreLastAppendAt = Date.now();
-        exploreForcedCount += 1;
-        try {
-            void Promise.resolve(state.loadMore())
-                .catch(() => {})
-                .finally(() => { exploreLoading = false; });
-        } catch {
-            exploreLoading = false;
-        }
-    }
-
-    function startExploreWatch() {
-        const doc = typeof document !== 'undefined' ? document : null;
-        if (exploreWatchOn || !doc || typeof doc.addEventListener !== 'function') return;
-        if (!exploreStoreRef.value) return;
-        exploreWatchOn = true;
-        exploreWatchDoc = doc;
-        // 只有真实用户输入才产生这些事件；宿主重排不会派发 wheel / touchmove，
-        // 自派 scroll 的 scrollTop 恒为 0 也贡献不了进度。没有定时器，没有 keydown。
-        for (const name of EXPLORE_INPUT_EVENTS) {
-            doc.addEventListener(name, onExploreProgress, { capture: true, passive: true });
-        }
-    }
-
-    function stopExploreWatch() {
-        exploreWatchOn = false;
-        exploreScrollQueued = false;
-        exploreAdvance = 0;
-        exploreLastObservedTop = null;
-        exploreTouchY = null;
-        exploreLoading = false;
-        exploreLastInputAt = 0;
-        if (exploreSettleTimer) {
-            clearTimeout(exploreSettleTimer);
-            exploreSettleTimer = 0;
-        }
-        if (exploreWatchDoc && typeof exploreWatchDoc.removeEventListener === 'function') {
-            for (const name of EXPLORE_INPUT_EVENTS) {
-                try {
-                    exploreWatchDoc.removeEventListener(name, onExploreProgress, { capture: true });
-                } catch {
-                    /* 已经撤下 */
-                }
-            }
-        }
-        exploreWatchDoc = null;
-    }
-
     let attaching = false;
     async function attachToHost(attempt = 0) {
         if (hostRef.value || attaching) return;
@@ -2725,9 +2526,24 @@ export default function activate(folium) {
                 // 0.8.1：**不挂 recommendations**。宿主 canUseRadio 会因此为 false，
                 // 键盘循环页签会跳过「推荐」；界面上那颗胶囊由 lib/homeTab.mjs 在
                 // bilibili 是当前音源时藏掉，切到别的音源自动还原。
-                // 「探索」页签：宿主原生歌曲卡 + 滚到底自动续读。
-                // 能力位在 attachLibrary() 里一起打开，设置页「显示探索」才亮。
-                explore: { getFeed: getExploreFeed, getSectionItems: getExploreSectionItems },
+                // 「探索」页签：宿主原生歌曲卡，翻页与换一批都由宿主负责。能力位在
+                // attachLibrary() 里一起打开，设置页「显示探索」才亮。
+                explore: {
+                    getFeed: getExploreFeed,
+                    getSectionItems: getExploreSectionItems,
+                    // 宿主用它把「听过的歌」重新登记成「墙上展示的歌」，换一批时据此避开。
+                    // 0.7.29 的 Bn() 期待返回 **Map<id, song>**（会调 .size/.get/.has），
+                    // 不是数组 —— 返回数组会报 `a.get is not a function`，seed 就永远记不上。
+                    // 我们展示即播放：把每首按 id 建进 Map 即可（与 YTM provider 的形状一致）。
+                    songsShownAs: (songs) => {
+                        const map = new Map();
+                        for (const song of (Array.isArray(songs) ? songs : [])) {
+                            const id = song && (song.id || (song.sourceRef && song.sourceRef.mediaId));
+                            if (id) map.set(String(id), song);
+                        }
+                        return map;
+                    },
+                },
                 // 只有三档是真实不同的：64K / 192K / FLAC。宿主默认还列一个 hires，
                 // 但 bilibili 没有比 FLAC 更高的档，选它和选无损听到的是同一个流。
                 playback: { audioQualityLevels: ['standard', 'high', 'lossless'] },
@@ -2741,51 +2557,19 @@ export default function activate(folium) {
                 return;
             }
             hostRef.value = host;
-            exploreStoreRef.value = host.exploreStore || null;
-            startExploreWatch();
             // 客户端日志不进宿主日志文件，真机排查把现场挂到 window 上给 CDP 读。
-            // 尤其是「96 首后续命」：拿不到 exploreStore 时会静默退化成宿主自读 4 批。
             try {
                 if (typeof window !== 'undefined') {
                     window.__bili081 = {
                         version: MOD_VERSION,
                         attached: true,
-                        exploreStoreFound: Boolean(host.exploreStore),
                         caps: {
                             explore: Boolean(provider.capabilities && provider.capabilities.explore),
                             recommendations: Boolean(provider.capabilities && provider.capabilities.recommendations),
                         },
-                        watch: () => {
-                            let feed = null;
-                            try {
-                                const s = exploreStoreRef.value && exploreStoreRef.value.getState();
-                                const f = s && s.feed;
-                                if (f) feed = {
-                                    status: f.status,
-                                    pages: f.pages,
-                                    read: f.read,
-                                    sections: Array.isArray(f.sections) ? f.sections.length : 0,
-                                    total: Array.isArray(f.sections)
-                                        ? f.sections.reduce((n, x) => n + (((x && x.items) || []).length), 0)
-                                        : 0,
-                                    nextCursor: f.nextCursor,
-                                    loadingMore: Boolean(f.loadingMore),
-                                };
-                            } catch { /* store 还没建好 */ }
-                            return {
-                                on: exploreWatchOn,
-                                inFlight: exploreLoading,
-                                reason: exploreLastReason,
-                                forcedCount: exploreForcedCount,
-                                stall: exploreStallCount,
-                                lastCursor: exploreLastCursor,
-                                lastAppendAt: exploreLastAppendAt,
-                                advance: exploreAdvance,
-                                biliActive: isBiliActive(),
-                                homeTab: currentHomeTab(),
-                                feed,
-                            };
-                        },
+                        // 最近一次给宿主喂了什么，换一批的真机核验读这个。
+                        lastFeed: null,
+                        biliActive: isBiliActive(),
                     };
                     // 0.8.2 起的新名字；旧名保留，历史验证脚本继续能读。
                     window.__bili082 = window.__bili081;
@@ -2848,7 +2632,7 @@ export default function activate(folium) {
     const openCommand = folium.registries.commands.register({
         id: 'open',
         label: { 'zh-CN': '打开 bilibili 收藏夹', en: 'Open bilibili favorites' },
-        keywords: ['bilibili', 'b站', '收藏夹', 'fav', 'playlist'],
+        keywords: ['bilibili', '收藏夹', 'fav', 'playlist'],
         run: async () => {
             folium.ui.navigate('home');
             await refreshWall();
@@ -2860,7 +2644,7 @@ export default function activate(folium) {
     const loginCommand = folium.registries.commands.register({
         id: 'login',
         label: { 'zh-CN': 'bilibili：扫码登录', en: 'bilibili: sign in with QR' },
-        keywords: ['bilibili', 'b站', '登录', '扫码', '二维码', 'login', 'qr'],
+        keywords: ['bilibili', '登录', '扫码', '二维码', 'login', 'qr'],
         run: () => {
             folium.ui.navigate('home');
             // 登录界面是宿主的：点缝里的音源位和用户自己点完全一样。
@@ -2877,7 +2661,7 @@ export default function activate(folium) {
     const logoutCommand = folium.registries.commands.register({
         id: 'logout',
         label: { 'zh-CN': 'bilibili：退出登录', en: 'bilibili: sign out' },
-        keywords: ['bilibili', 'b站', '退出', '登出', 'logout'],
+        keywords: ['bilibili', '退出', '登出', 'logout'],
         run: async () => {
             await auth.logout();
             toast(t('已退出 bilibili 账号', 'Signed out of bilibili'), 'success');
@@ -2888,11 +2672,12 @@ export default function activate(folium) {
     const refreshCommand = folium.registries.commands.register({
         id: 'refresh',
         label: { 'zh-CN': 'bilibili：刷新缓存', en: 'bilibili: refresh cache' },
-        keywords: ['bilibili', 'b站', '缓存'],
+        keywords: ['bilibili', '缓存'],
         run: async () => {
             clearCaches();
             await rpc('clearCache');
-            covers = await loadCovers();
+            // 服务端封面缓存已清，本地这份也丢弃重读（reset），否则合并会把旧封面留着。
+            covers = await loadCovers(true);
             await refreshWall();
             toast(t('缓存清好了', 'Cache cleared'), 'success');
             return 'cleared';
@@ -2908,7 +2693,7 @@ export default function activate(folium) {
     const reattachCommand = folium.registries.commands.register({
         id: 'reattach',
         label: { 'zh-CN': 'bilibili：重新接入', en: 'bilibili: reattach' },
-        keywords: ['bilibili', 'b站', '曲库', '接入', '重试', 'library', 'attach', 'retry'],
+        keywords: ['bilibili', '曲库', '接入', '重试', 'library', 'attach', 'retry'],
         run: async () => {
             hostRef.value = null;
             attaching = false;
@@ -2964,7 +2749,6 @@ export default function activate(folium) {
         failedAt.clear();
         tabRelabel.stop();
         homeTabHider.stop();
-        stopExploreWatch();
         uninstallLyricSource();
         qualityCache.clear();
         unwatchSettings();
@@ -2974,7 +2758,6 @@ export default function activate(folium) {
         folderCache.clear();
         qrKeys.clear();
         exploreFlights.clear();
-        exploreStoreRef.value = null;
         hostRef.value = null;
     };
 }

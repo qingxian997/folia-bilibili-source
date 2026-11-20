@@ -1,9 +1,9 @@
 // 宿主「探索」页签的歌曲瀑布流：游标、section/item 形状、空批收敛。
-// 契约来自 0.7.26 的 remoteActions-*.js + useExploreWall-*.js。
+// 契约来自 0.7.29 的 remoteActions / omni（换一批 + seed）。
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
-    EXPLORE_TITLE, feedCursor, moreCursor, parseExploreCursor,
+    EXPLORE_TITLE, REFRESH_READS_ANEW, feedCursor, moreCursor, parseExploreCursor,
     songsToItems, exploreSection, feedAnswer, sectionAnswer,
 } from '../lib/explore.mjs';
 
@@ -47,19 +47,21 @@ test('section 带稳定标题、独立 id 和 moreCursor；空批不交 section'
     assert.equal(exploreSection(31, 61, [null, {}]), null);
 });
 
-test('getExploreFeed 的答复：nextCursor 必须推进，且不能声明 refreshReadsAnew', () => {
+test('getExploreFeed 的答复：nextCursor 推进，并声明 refreshReadsAnew 让换一批用上 seed', () => {
     const section = exploreSection(1, 31, [song('BV1')]);
     const answer = feedAnswer(section, 31);
     assert.equal(answer.sections.length, 1);
     assert.equal(answer.nextCursor, feedCursor(31));
     assert.notEqual(answer.nextCursor, feedCursor(1), '和上一批的游标相同会被宿主当成没进度');
-    assert.equal(answer.refreshReadsAnew, undefined,
-        '0.8.1：这一位让宿主 refresh 跳过 moreCursor 追加、重放旧池子，正是「换一批还是这些」的根因');
+    assert.equal(answer.refreshReadsAnew, true,
+        '0.7.29：宿主刷新时看到这一位才跳过逐 section 追加、把 seed 传进 getFeed');
+    assert.equal(answer.refreshReadsAnew, REFRESH_READS_ANEW, '回退开关是唯一来源，便于现场 A/B');
     assert.equal(parseExploreCursor(answer.nextCursor), 31);
 
     const empty = feedAnswer(null, 31);
     assert.deepEqual(empty.sections, []);
     assert.equal(empty.nextCursor, undefined, '空批别再给 nextCursor，否则宿主会连问 3 次');
+    assert.equal(empty.refreshReadsAnew, undefined, '空批不带任何刷新标记');
 });
 
 test('0.8.1：fresh_idx 没有 400 回绕，游标一直往后走', () => {

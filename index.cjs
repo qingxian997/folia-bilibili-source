@@ -138,7 +138,10 @@ module.exports = function activate(api) {
                 }
             } catch (error) {
                 api.log.warn('bili: buvid bootstrap failed', error);
-                state.buvid = { b3: '', b4: '' };
+                // 0.9.2：以前这里把空指纹写进 state.buvid，之后 `if (state.buvid) return`
+                // 直接返回空值，本次进程再也不会重试，全程缺 buvid3 → 一直吃 -412。
+                // 现在只返回一份临时空对象给这次调用，不缓存；下次请求会重新申请。
+                return { b3: '', b4: '' };
             } finally {
                 state.buvidPending = null;
             }
@@ -261,17 +264,26 @@ module.exports = function activate(api) {
 
     /** 带 WBI 的端点失败时退回未签名版本（部分端点仍然收），再失败才抛。 */
     async function getJsonSigned(signedPath, unsignedPath, params) {
+        let json = null;
         try {
-            const json = await getJson(`${signedPath}?${await wbiQuery(params)}`);
+            json = await getJson(`${signedPath}?${await wbiQuery(params)}`);
             if (json && json.code === 0) return json;
-            api.log.warn('bili: signed endpoint answered non-zero', json && json.code, signedPath);
+            const code = Number(json && json.code);
+            // 0.9.2：限流码直接抛，不回退未签名版本。以前这里被挡一下就再发一发，
+            // 风控期请求翻倍，越补越狠。只有真正「签名不被收」的错误才回退。
+            if (COVER_THROTTLE_CODES.has(code) || code === -403) {
+                throw new Error(`bili: ${code} ${(json && json.message) || ''}`.trim());
+            }
+            api.log.warn('bili: signed endpoint answered non-zero', code, signedPath);
         } catch (error) {
-            api.log.warn('bili: signed request failed, retrying unsigned', String(error && error.message));
+            const text = String((error && error.message) || error || '');
+            if (COVER_RETRYABLE.test(text) || /-412|-799|-352|-509|-403/.test(text)) throw error;
+            api.log.warn('bili: signed request failed, retrying unsigned', text);
         }
         const query = Object.keys(params)
             .map((key) => `${encodeURIComponent(key)}=${encodeURIComponent(params[key])}`)
             .join('&');
-        const json = await getJson(`${unsignedPath}?${query}`);
+        json = await getJson(`${unsignedPath}?${query}`);
         if (json && json.code !== 0) throw new Error(`bili: ${json.code} ${json.message || ''}`.trim());
         return json;
     }
@@ -410,7 +422,14 @@ module.exports = function activate(api) {
             });
             // 端口耗尽 / 防火墙拦 listen 时，必须把 pending 放掉再抛。
             // 否则这个 Promise 会一直保持 rejected，之后每次取流都直接失败到重启宿主。
+            // 0.9.2：listen 成功之后 server 再报 error（运行期出错），以前只 close 掉
+            // 却留着 state.server / state.port 指向死端口，之后每次取流都拿到这个死地址。
+            // 现在两种情形都把状态清干净；已 resolve 的 promise 再 reject 也无效，无妨。
             const fail = (error) => {
+                if (state.server === server) {
+                    state.server = null;
+                    state.port = 0;
+                }
                 state.pending = null;
                 try {
                     server.close();
@@ -503,18 +522,22 @@ module.exports = function activate(api) {
 
     /** 直链能不能被「不带 Referer 的播放器」直接取到。取不到就走反代。 */
     async function probeDirect(url) {
+        const controller = new AbortController();
+        // 0.9.2：以前 timer 只在 fetch 成功路径 clear，失败时悬着 6 秒才自己烧掉，
+        // 反复切歌会堆一堆短命定时器；也没 unref。现在 finally 里一律清掉。
+        const timer = setTimeout(() => controller.abort(), 6000);
+        if (typeof timer.unref === 'function') timer.unref();
         try {
-            const controller = new AbortController();
-            const timer = setTimeout(() => controller.abort(), 6000);
             const response = await fetch(url, {
                 headers: { 'User-Agent': UA, Range: 'bytes=0-1' },
                 redirect: 'follow',
                 signal: controller.signal,
             });
-            clearTimeout(timer);
             return response.status === 200 || response.status === 206;
         } catch {
             return false;
+        } finally {
+            clearTimeout(timer);
         }
     }
 
@@ -755,14 +778,21 @@ module.exports = function activate(api) {
     });
 
     async function ownMid() {
-        return cached('nav', TTL.nav, async () => {
-            try {
+        try {
+            const mid = await cached('nav', TTL.nav, async () => {
+                // 网络抖动直接往外抛，别把失败当「没有 mid」交给上面的 cached 记住。
                 const json = await getJson(`${API}/x/web-interface/nav`);
                 return String((json && json.data && json.data.mid) || '');
-            } catch {
-                return '';
-            }
-        });
+            });
+            // 0.9.2：nav 回答里没有 mid（临时异常 / 未登录）也不缓存 —— 以前一次
+            // 抖动会被 cached 记 5 分钟空串，folders / collected / liked 全走「未登录」。
+            if (!mid) memo.delete('nav');
+            return mid;
+        } catch (error) {
+            memo.delete('nav');
+            api.log.warn('bili: 读取账号 mid 失败', String(error && error.message));
+            return '';
+        }
     }
 
     /** 某个账号建的全部收藏夹（公开信息，别人的也读得到）。 */
@@ -1151,33 +1181,70 @@ module.exports = function activate(api) {
         if (typeof coverSaveTimer.unref === 'function') coverSaveTimer.unref();
     }
 
-    handle('folderCover', async ({ mediaId }) => {
+    /**
+     * 取一个收藏夹的封面（夹里前几条视频的图）。单夹封面和批量补封面共用这一条路。
+     *
+     * 0.9.2：**限流 != 没有封面**。以前批量补封面把 -412 也写成空数组，空结果进
+     * 5 分钟负缓存，于是被挡一下之后有封面也空白五分钟 —— 这就是「封面时不时取不到」。
+     * 现在网络错误和限流码重试几次；无论哪种失败都绝不写负缓存，交给调用方记一笔。
+     * code=0 但确实没有可用视频（空夹 / 全是失效视频）才返回 ok:true + 空数组。
+     */
+    const COVER_THROTTLE_CODES = new Set([-412, -799, -352, -509]);
+    const COVER_RETRYABLE = /(412|请求太频繁|timeout|timed out|ETIMEDOUT|ECONNRESET|ECONNREFUSED|EAI_AGAIN|socket hang up|network)/i;
+    async function coverPage(id) {
+        let last = null;
+        for (let attempt = 0; attempt < 3; attempt += 1) {
+            let json = null;
+            try {
+                json = await getJson(
+                    `${API}/x/v3/fav/resource/list?media_id=${encodeURIComponent(id)}&pn=1&ps=4&keyword=&order=mtime&type=0&tid=0&platform=web`,
+                );
+            } catch (error) {
+                const throttled = COVER_RETRYABLE.test(String((error && error.message) || error || ''));
+                last = { throttled, code: null };
+                if (!throttled || attempt === 2) break;
+                await sleep(700 * (attempt + 1));
+                continue;
+            }
+            const code = json && json.code;
+            if (code !== 0) {
+                const throttled = COVER_THROTTLE_CODES.has(Number(code));
+                last = { throttled, code };
+                if (!throttled || attempt === 2) break;
+                await sleep(700 * (attempt + 1));
+                continue;
+            }
+            const data = (json && json.data) || {};
+            const list = ((data.medias) || [])
+                .filter((item) => item && item.cover && String(item.title || '') !== '已失效视频')
+                .map((item) => cover(item.cover))
+                .slice(0, 4);
+            // 首屏几条恰好全失效时，退回收藏夹自己的封面（贴链接那条路用的就是它）。
+            if (!list.length && data.info && data.info.cover) list.push(cover(data.info.cover));
+            return { ok: true, covers: list };
+        }
+        return { ok: false, throttled: Boolean(last && last.throttled), code: last && last.code };
+    }
+
+    handle('folderCover', async ({ mediaId, force } = {}) => {
         const key = String(mediaId);
         const cache = await loadCoverCache();
         const saved = cache[key];
-        if (saved && Array.isArray(saved.covers) && saved.covers.length && Date.now() - Number(saved.at || 0) < COVER_TTL) {
+        if (!force && saved && Array.isArray(saved.covers) && saved.covers.length && Date.now() - Number(saved.at || 0) < COVER_TTL) {
             return { covers: saved.covers, cached: true };
         }
 
-        const json = await getJson(
-            `${API}/x/v3/fav/resource/list?media_id=${encodeURIComponent(mediaId)}&pn=1&ps=4&keyword=&order=mtime&type=0&tid=0&platform=web`,
-        );
-        if (!json || json.code !== 0) {
-            const code = json && json.code;
+        const answer = await coverPage(key);
+        if (!answer.ok) {
             // 抛出去而不是回空数组：渲染进程要靠这条消息判断「是被限流了」，好停下来歇一会儿
-            if (code === -412 || code === -352) throw new Error('bili: 封面读太快被 bilibili 拦了，过几分钟再试');
+            if (answer.throttled) throw new Error('bili: 封面读太快被 bilibili 拦了，过几分钟再试');
             return { covers: [] };
         }
-        const medias = (json.data && json.data.medias) || [];
-        const covers = medias
-            .filter((item) => item && item.cover && String(item.title || '') !== '已失效视频')
-            .map((item) => cover(item.cover))
-            .slice(0, 4);
-        if (covers.length) {
-            cache[key] = { at: Date.now(), covers };
+        if (answer.covers.length) {
+            cache[key] = { at: Date.now(), covers: answer.covers };
             scheduleCoverSave();
         }
-        return { covers };
+        return { covers: answer.covers };
     });
 
     /** 只读已经存下来的封面（不联网）：宿主画歌单卡时先要一份，没有的再慢慢补。 */
@@ -1197,64 +1264,61 @@ module.exports = function activate(api) {
     /**
      * 补封面：收藏夹接口不返回封面，只能进夹里取第一条视频的图。
      *
-     * 串行 + 每条之间隔 700ms——并发十几条必然被 bilibili 412（实测）。
-     * **0.8.4 修正两处**：
-     *   1. 以前是 `if (filled) await sleep(700)`，只有成功才等；空夹 / 私有夹会
-     *      `continue` 掉，于是 40 个 id 能毫秒级连发，正好踩在风控上。现在失败也等。
-     *   2. 空结果以前不写缓存，于是每次库墙刷新都会把同一批空夹重问一遍。
-     *      现在按 5 分钟负缓存记下来，刷墙只读本地。
+     * 串行 + 每条之间隔 700ms——并发十几条必然被 bilibili 412（实测）。失败也照样等，
+     * 否则 40 个 id 会毫秒级连发，正好踩在风控上（0.8.4 的教训）。
+     *
+     * 0.9.2：限流 / 网络失败不再写成「没封面」的负缓存，也不再 `break` 掉整批 ——
+     * 以前一次 -412 会让后面所有夹子都空白、还空白五分钟。现在只跳过失败那条。
+     * `force:true` 忽略 TTL 和负缓存，给「清缓存」按钮强制重取用。
      */
     const COVER_MISS_TTL = 5 * 60 * 1000;
     let filling = null;
-    handle('fillCovers', async ({ ids } = {}) => {
+    handle('fillCovers', async ({ ids, force } = {}) => {
         const cache = await loadCoverCache();
         const now = Date.now();
         const wanted = (Array.isArray(ids) ? ids : []).map(String).filter(Boolean);
-        const missing = wanted.filter((id) => {
+        const missing = force ? wanted : wanted.filter((id) => {
             const entry = cache[id];
             const at = Number((entry && entry.at) || 0);
             if (entry && Array.isArray(entry.covers) && entry.covers.length) {
                 return !(now - at < COVER_TTL);
             }
-            // 空结果：5 分钟内不再问（负缓存）
+            // 空结果：5 分钟内不再问（负缓存，只用于 code=0 的真·空夹）
             return !(entry && now - at < COVER_MISS_TTL);
         });
-        if (!missing.length) return { covers: cache, filled: 0 };
+        if (!missing.length) return { covers: cache, filled: 0, failed: 0 };
         if (filling) return filling;
 
         filling = (async () => {
             let filled = 0;
+            let failed = 0;
             let attempted = 0;
             for (const id of missing.slice(0, 40)) {
                 if (attempted) await sleep(700);
                 attempted += 1;
                 try {
-                    const json = await getJson(
-                        `${API}/x/v3/fav/resource/list?media_id=${encodeURIComponent(id)}&pn=1&ps=4&keyword=&order=mtime&type=0&tid=0&platform=web`,
-                    );
-                    if (!json || json.code !== 0) {
-                        cache[id] = { at: Date.now(), covers: [] };
+                    const answer = await coverPage(id);
+                    if (!answer.ok) {
+                        failed += 1;
+                        api.log.warn('bili: 封面取不到', id, answer.code == null ? 'network' : String(answer.code));
+                        // 关键：绝不为限流/网络失败写负缓存，否则空白五分钟。
                         continue;
                     }
-                    const medias = (json.data && json.data.medias) || [];
-                    const list = medias
-                        .filter((item) => item && item.cover && String(item.title || '') !== '已失效视频')
-                        .map((item) => cover(item.cover))
-                        .slice(0, 4);
-                    if (!list.length) {
-                        // 空夹、全是失效视频：记一笔负结果，别每次刷墙都重来
+                    if (answer.covers.length) {
+                        cache[id] = { at: Date.now(), covers: answer.covers };
+                        filled += 1;
+                    } else {
+                        // code=0，确实是空夹 / 全是失效视频：合法负结果
                         cache[id] = { at: Date.now(), covers: [] };
-                        continue;
                     }
-                    cache[id] = { at: Date.now(), covers: list };
-                    filled += 1;
                 } catch (error) {
+                    failed += 1;
                     api.log.warn('bili: 封面取不到', id, String(error && error.message));
-                    break;
+                    continue;
                 }
             }
             if (attempted) scheduleCoverSave();
-            return { covers: cache, filled };
+            return { covers: cache, filled, failed };
         })();
 
         try {
@@ -1633,6 +1697,23 @@ module.exports = function activate(api) {
         state.wbi = null;
         memo.clear();
         inflight.clear();
+        // 0.9.2：封面和额外列表以前没清 —— 点了「刷新缓存」它们还是从磁盘读回旧的，
+        // 「清缓存让封面重取」根本不起作用。连待写盘的定时器一起取消，防旧值回写。
+        coverCache = null;
+        extraCache = null;
+        if (coverSaveTimer) {
+            clearTimeout(coverSaveTimer);
+            coverSaveTimer = null;
+        }
+        for (const key of ['covers', 'extras']) {
+            try {
+                if (api.storage && typeof api.storage.delete === 'function') {
+                    await api.storage.delete(key);
+                }
+            } catch {
+                /* 老宿主没这个接口就算了 */
+            }
+        }
         return { ok: true };
     });
 
