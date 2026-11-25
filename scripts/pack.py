@@ -2,7 +2,7 @@
 """打发布包。
 
     python scripts/pack.py            # 版本号读 mod.json
-    python scripts/pack.py 2.0.0      # 临时改个版本号（不会写回 mod.json）
+    python scripts/pack.py 2.0.1      # 临时改个版本号（不会写回 mod.json）
 
 产物在 dist/：
     bilibili-<ver>.zip          只要运行需要的文件，解压到模组目录就能用

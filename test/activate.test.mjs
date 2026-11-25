@@ -39,6 +39,7 @@ const install = (overrides = {}) => {
                 if (answer === undefined) throw new Error(`unstubbed rpc: ${name}`);
                 return Promise.resolve(answer);
             },
+            on() { return () => {}; },
         },
         omni: {
             listProviders: () => [
@@ -138,7 +139,7 @@ test('activate 注册 provider / 设置分区 / 首页页面 / 命令', () => {
     }
     assert.equal(registered.settings.length, 1);
     const fields = registered.settings[0].settings;
-    assert.equal(fields.length, 13);
+    assert.equal(fields.length, 14);
     // 不再有 Navidrome 地址：收藏夹改成模组自己的整页。
     assert.equal(fields.some((field) => field.key === 'bridgeServer'), false);
     const rawTitle = fields.find((field) => field.key === 'rawTitle');
@@ -181,6 +182,7 @@ test('activate 注册 provider / 设置分区 / 首页页面 / 命令', () => {
             ['extraCollections', 'content'],
             ['lyrics', 'playback'],
             ['route', 'playback'],
+            ['autoUpdate', 'advanced'],
             ['rawTitle', 'advanced'],
             ['maxMinutes', 'advanced'],
         ],

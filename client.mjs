@@ -51,7 +51,7 @@ const HOST_LYRIC_ORDER = ['netease', 'qq', 'kugou'];
 /** 宿主用它画音源徽标：bilibili 的粉。 */
 const BILI_PINK = '#FB7299';
 /** 面板上显示的版本号，和 mod.json 保持一致（打包校验会盯这一条）。 */
-const MOD_VERSION = '2.0.0';
+const MOD_VERSION = '2.0.1';
 /** 批量改收藏夹时每首之间的间隔：fav/resource/deal 连发几十个必吃 -412。 */
 const ADD_INTERVAL_MS = 250;
 
@@ -1565,6 +1565,25 @@ export default function activate(folium) {
             defaultValue: 'auto',
         },
         {
+            key: 'autoUpdate',
+            group: 'advanced',
+            type: 'boolean',
+            label: { 'zh-CN': '自动更新', en: 'Automatic updates' },
+            hint: {
+                'zh-CN': '启动时检查 GitHub 上的新版本。',
+                en: 'Check GitHub for a newer version at startup.',
+            },
+            description: {
+                'zh-CN':
+                    '打开后会在启动时检查新版本，下载校验通过后直接交给 Folia 安装。' +
+                    '升级内容变了，Folia 仍会弹一次信任确认，有时还要重启。',
+                en:
+                    'Checks for a newer version at startup, then downloads and verifies it before ' +
+                    'handing it to Folia. The host still asks for trust confirmation and may need a restart.',
+            },
+            defaultValue: false,
+        },
+        {
             key: 'rawTitle',
             group: 'advanced',
             type: 'boolean',
@@ -2484,6 +2503,75 @@ export default function activate(folium) {
         },
     };
 
+    // ---------------------------------------------------------------- 自动更新
+
+    let updateInfo = null;
+    let autoInstalling = false;
+    const updateListeners = new Set();
+    const offUpdateState = folium.rpc.on('update.state', (info) => {
+        updateInfo = info;
+        for (const listener of [...updateListeners]) {
+            try { listener(info); } catch { /* 一个面板坏了不影响别的 */ }
+        }
+    });
+
+    const publishUpdate = (info) => {
+        updateInfo = info;
+        for (const listener of [...updateListeners]) {
+            try { listener(info); } catch { /* 同上 */ }
+        }
+        return info;
+    };
+
+    async function checkUpdate(force = true) {
+        const info = await rpc('update.check', { force: Boolean(force) });
+        return publishUpdate(info);
+    }
+
+    /** 下载、校验、然后把本地路径交给宿主安装；确认弹窗由宿主负责。 */
+    async function installUpdate() {
+        if (autoInstalling) return { skipped: true };
+        autoInstalling = true;
+        let scheduled = false;
+        try {
+            const saved = await rpc('update.download');
+            toast(t(`新版本 ${saved.version} 已下载，正在交给 Folia 安装。`, `Version ${saved.version} downloaded; handing it to Folia.`), 'info');
+            // 先把 RPC 应答送回去，再让宿主重新加载模组；自己替换自己时不能卡在调用栈里。
+            scheduled = true;
+            setTimeout(() => {
+                try {
+                    const result = window.electron.mods.installModFromZip(saved.file);
+                    if (result && typeof result.then === 'function') {
+                        result.catch((error) => log.warn('bili: 更新安装失败', String(error && error.message)));
+                    }
+                } catch (error) {
+                    log.warn('bili: 更新安装失败', String(error && error.message));
+                    toast(t('安装没启动，请手动下载安装。', 'Install did not start; please install manually.'), 'warning');
+                } finally {
+                    autoInstalling = false;
+                }
+            }, 120);
+            return saved;
+        } catch (error) {
+            autoInstalling = false;
+            throw error;
+        }
+    }
+
+    const updates = {
+        state: async () => {
+            const info = await rpc('update.state');
+            return publishUpdate(info);
+        },
+        check: checkUpdate,
+        install: installUpdate,
+        onChange: (listener) => {
+            updateListeners.add(listener);
+            return () => updateListeners.delete(listener);
+        },
+        current: () => (updateInfo ? { ...updateInfo } : null),
+    };
+
     // 设置面板的依赖到这里全了（auth、缓存、重读墙），统一接一次线。
     settingsPanel = createSettingsPanel({
         pickLabel,
@@ -2506,6 +2594,7 @@ export default function activate(folium) {
         collectedNow,
         clearCaches,
         refreshWall,
+        updates,
         reloadCovers: async () => {
             covers = await loadCovers();
         },
@@ -2591,6 +2680,17 @@ export default function activate(folium) {
         log.warn('bili: 原生音源注册失败', String(error && error.message));
         toast(t('bilibili 没能注册成音源，请重启 Folia 再试。', 'bilibili could not register as a source; restart Folia.'), 'warning');
     }
+
+    // 自动更新：启动晚一点，别跟宿主自己的注册和书库首帧抢网络。
+    later(async () => {
+        if (!config().autoUpdate) return;
+        try {
+            const info = await checkUpdate(false);
+            if (info && info.available) await installUpdate();
+        } catch (error) {
+            log.warn('bili: 自动检查更新失败', String(error && error.message));
+        }
+    }, 5000);
 
     // 客户端日志不进宿主日志文件，真机排查把现场挂到 window 上给 CDP 读。
     try {
@@ -2742,6 +2842,21 @@ export default function activate(folium) {
         },
     });
 
+    const updateCommand = folium.registries.commands.register({
+        id: 'check-update',
+        label: { 'zh-CN': 'bilibili：检查更新', en: 'bilibili: check for updates' },
+        keywords: ['bilibili', '更新', 'update', 'release'],
+        run: async () => {
+            const info = await checkUpdate(true);
+            if (info && info.available) {
+                toast(t(`发现新版本 ${info.version}。`, `Version ${info.version} is available.`), 'info');
+                return info.version;
+            }
+            toast(t('已经是最新版本。', 'Already up to date.'), 'success');
+            return 'up-to-date';
+        },
+    });
+
     // 一启动就把 bilibili 挂进宿主那张表；拿不到 chunk 只记一条日志，别的功能不受影响。
     void installLyricSource().catch((error) => {
         log.warn('bili: 注册歌词源失败', String(error && error.message));
@@ -2777,8 +2892,11 @@ export default function activate(folium) {
         openCommand.unregister();
         loginCommand.unregister();
         refreshCommand.unregister();
+        updateCommand.unregister();
         logoutCommand.unregister();
         reattachCommand.unregister();
+        offUpdateState();
+        updateListeners.clear();
         lyricCache.clear();
         lyricInflight.clear();
         try {

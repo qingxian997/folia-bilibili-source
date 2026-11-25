@@ -8,18 +8,20 @@
 > **这个模组只是视频音源**：把公开视频的声音、字幕和曲库信息整理成 Folia 认识的形状。它不碰番剧、电影，也不接管或替换 Folia 的视频播放功能 —— 界面和交互都遵循 Folia 的设计原则，你看到的就是一个普通的 Folia 音源。
 
 > [!WARNING]
-> **2.0.0 正式版：Folium 2 原生音源。**
+> **2.0.1 正式版：Folium 2 原生音源。**
 >
 > 模组已按 `folium: 2` 的 `sources` 契约声明能力，不再借实验接口。正式版指的是功能完整、可直接安装使用；未经过社区审核与签名前，它仍是「未验证」的社区模组，需要开启「社区模组」开关才能安装运行。
 
-**[下载正式版 2.0.0](https://github.com/qingxian997/folia-bilibili-source/releases)** —— 下 `bilibili-2.0.0.zip`，装法见下面的[快速开始](#快速开始)。源码包在同一个页面。
+**[下载正式版 2.0.1](https://github.com/qingxian997/folia-bilibili-source/releases)** —— 下 `bilibili-2.0.1.zip`，装法见下面的[快速开始](#快速开始)。源码包在同一个页面。
 
 | | |
 | --- | --- |
 | 宿主 | Folia 0.8.x（模组系统 0.2.0 / Folium 2）；**本版本针对 Folia 0.8.0 验证** |
-| 模组版本 | 2.0.0（正式版，原生音源） |
+| 模组版本 | 2.0.1（正式版，原生音源） |
 | 许可证 | MIT |
 | 官方市场 | 需通过社区审核与签名后才可上架 |
+
+![模组卡片](docs/screenshots/mod-card.jpg)
 
 ## 核心特性
 
@@ -62,9 +64,9 @@
 
 ### 安装
 
-1. 在 [Releases](https://github.com/qingxian997/folia-bilibili-source/releases) 下载 `bilibili-2.0.0.zip`。
+1. 在 [Releases](https://github.com/qingxian997/folia-bilibili-source/releases) 下载 `bilibili-2.0.1.zip`。
 2. 打开模组目录，开启社区模组选项。
-3. 打开模组市场，拖入`bilibili-2.0.0.zip`完成安装。
+3. 打开模组市场，拖入`bilibili-2.0.1.zip`完成安装。
 4. 设置 → 模组 → 模组管理 → 找到 bilibili → 打开开关。
    第一次会问你是否信任：这个模组没有官方签名，选「信任」才会加载。
 5. 书库首页 → 音源 → bilibili → 扫码登录。
@@ -122,6 +124,8 @@
 | --- | --- |
 | 跳过超过多少分钟的视频 | 合集和直播回放通常很长，填 0 就不过滤 |
 | 显示原始标题 | 列表和播放器显示 UP 主原题，不用「歌手 - 歌名」 |
+| 自动更新 | 打开后启动时检查 GitHub 上的新版本，下载校验通过后交给 Folia 安装；安装时仍要确认信任，有时要重启 |
+| 检查更新 / 下载并安装 | 手动查版本、下载并安装更新包 |
 | 清缓存并重新读一遍 | 数据不对时点这个 |
 
 ![播放与歌词、高级两组](docs/screenshots/settings-playback.jpg)

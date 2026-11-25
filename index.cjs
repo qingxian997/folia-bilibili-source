@@ -13,7 +13,10 @@
 const http = require('node:http');
 const crypto = require('node:crypto');
 const fs = require('node:fs');
+const os = require('node:os');
 const path = require('node:path');
+const { Readable } = require('node:stream');
+const { pipeline } = require('node:stream/promises');
 const { listAsarDir } = require('./lib/asar.cjs');
 const {
     passportCookiesFromUrl,
@@ -26,6 +29,9 @@ const { createCookieStore } = require('./lib/store.cjs');
 const { normalizeFeedItems, nextFeedCursor, MAX_FEED_PAGE } = require('./lib/feed.cjs');
 const { pipeUpstream } = require('./lib/proxyStream.cjs');
 const { remember } = require('./lib/memoCache.cjs');
+const { createUpdateService } = require('./lib/update.cjs');
+
+const { version: CURRENT_VERSION } = require('./mod.json');
 
 const API = 'https://api.bilibili.com';
 const PASSPORT = 'https://passport.bilibili.com';
@@ -80,6 +86,60 @@ module.exports = function activate(api) {
             if (error && error.done != null) clean.done = error.done;
             throw clean;
         }
+    });
+
+    // ---------------------------------------------------------------- update
+
+    /** 下载 GitHub Release 附件：流式落盘，限时、限大小，失败了不留半截文件。 */
+    async function downloadFile(url, file, maxBytes) {
+        const controller = new AbortController();
+        const timer = setTimeout(() => controller.abort(), 120000);
+        try {
+            const response = await fetch(url, {
+                headers: { 'User-Agent': UA, Accept: 'application/octet-stream' },
+                redirect: 'follow',
+                signal: controller.signal,
+            });
+            if (!response.ok || !response.body) throw new Error(`bili: 下载更新包失败（HTTP ${response.status}）`);
+            const declared = Number(response.headers.get('content-length') || 0);
+            if (declared > maxBytes) throw new Error('bili: 更新包太大，已停止下载');
+            let size = 0;
+            const counted = (async function* () {
+                for await (const chunk of Readable.fromWeb(response.body)) {
+                    size += chunk.length;
+                    if (size > maxBytes) throw new Error('bili: 更新包太大，已停止下载');
+                    yield chunk;
+                }
+            })();
+            await pipeline(counted, fs.createWriteStream(file));
+        } catch (error) {
+            if (error && error.name === 'AbortError') throw new Error('bili: 下载更新包超时，稍后再试');
+            throw error;
+        } finally {
+            clearTimeout(timer);
+        }
+    }
+
+    let updateDir = '';
+    const storagePaths = (api.storage && api.storage.paths) || {};
+    try {
+        if (storagePaths.cache) {
+            updateDir = storagePaths.cache;
+            fs.mkdirSync(updateDir, { recursive: true });
+        }
+    } catch (error) {
+        api.log.warn('bili: 更新缓存目录不可用', String(error && error.message));
+        updateDir = '';
+    }
+
+    const updater = createUpdateService({
+        getJson,
+        download: downloadFile,
+        cacheDir: updateDir || path.join(storagePaths.data || os.tmpdir(), 'bili-update'),
+        currentVersion: CURRENT_VERSION,
+        storage: api.storage,
+        log: api.log,
+        notify: (name, payload) => api.rpc.send(name, payload),
     });
 
     // ---------------------------------------------------------------- cookie
@@ -1709,6 +1769,17 @@ module.exports = function activate(api) {
         api.log.info('bili: direct stream rejected, using local proxy');
         return { url: `http://127.0.0.1:${port}/a?t=${state.token}&u=${encoded}`, via: 'proxy', volatile: true, expiresAt, cid, audioId: chosen.id };
     });
+
+    handle('update.check', async ({ force = false } = {}) => updater.check(Boolean(force)));
+
+    handle('update.state', async () => updater.state());
+
+    handle('update.download', async () => {
+        const saved = await updater.download();
+        return { ok: true, version: saved.version, file: saved.file, sha256: saved.sha256 };
+    });
+
+    handle('update.skip', async ({ version = '' } = {}) => updater.skip(version));
 
     handle('clearCache', async () => {
         state.views.clear();

@@ -81,6 +81,7 @@ const install = ({ song = null, settings = {}, signedIn = true, lyricsMissFirst 
                 if (rpcAnswers[name] === undefined) throw new Error(`unstubbed rpc: ${name}`);
                 return Promise.resolve(rpcAnswers[name]);
             },
+            on() { return () => {}; },
         },
         omni: {
             listProviders: () => [
