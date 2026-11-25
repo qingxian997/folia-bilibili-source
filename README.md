@@ -2,7 +2,7 @@
 
 [![CI](https://github.com/qingxian997/folia-bilibili-source/actions/workflows/ci.yml/badge.svg)](https://github.com/qingxian997/folia-bilibili-source/actions/workflows/ci.yml)
 
-把 bilibili 当成 [Folia](https://github.com/chthollyphile/folia-major) 里的一个音源：搜视频、听收藏夹与 UP 主合集、用视频字幕当歌词。界面由 Folia 自己画，这个模组只提供数据。
+把 bilibili 当成 [Folia](https://github.com/chthollyphile/folia-major) 里的一个音源：搜视频、听收藏夹与 UP 主合集、用视频字幕当歌词。
 
 > [!NOTE]
 > **这个模组只是视频音源**：把公开视频的声音、字幕和曲库信息整理成 Folia 认识的形状。它不碰番剧、电影，也不接管或替换 Folia 的视频播放功能 —— 界面和交互都遵循 Folia 的设计原则，你看到的就是一个普通的 Folia 音源。
@@ -25,7 +25,6 @@
 
 ## 核心特性
 
-- **真·原生音源**：界面、方墙、翻牌、队列、方向键全是 Folia 自己画的，模组只喂数据 —— 所以它长得和别的音源一模一样，不会突然多一层自绘的墙。
 - **收藏夹进书库**：我建的、我收藏的、别人的公开收藏夹，都变成书库里的卡片，点开就是歌。
 - **合集与系列**：UP 主的合集和系列进「合集」页签，选中 bilibili 时胶囊会自动改名。
 - **探索页用宿主原生体验**：首页推荐做成一整面瀑布墙，往下滚由宿主翻页，点「换一批」换一批推荐（会避开你最近听过的）。
@@ -66,15 +65,8 @@
 ### 安装
 
 1. 在 [Releases](https://github.com/qingxian997/folia-bilibili-source/releases) 下载 `bilibili-2.0.0.zip`。
-2. 解压到 Folia 的模组目录，文件夹名叫 `bilibili`：
-
-   ```
-   %APPDATA%\Folia\mods\bilibili\mod.json
-   ```
-
-   （macOS / Linux 是 Electron 的 userData 目录，即 `…/Folia/mods/`。）
-
-3. **完全退出 Folia 再启动** —— 只关窗口不算，模组只在启动时加载。
+2. 打开模组目录，开启社区模组选项。
+3. 打开模组市场，拖入`bilibili-2.0.0.zip`完成安装。
 4. 设置 → 模组 → 模组管理 → 找到 bilibili → 打开开关。
    第一次会问你是否信任：这个模组没有官方签名，选「信任」才会加载。
 5. 书库首页 → 音源 → bilibili → 扫码登录。
@@ -99,8 +91,6 @@
 设置面板有四组，**默认全部收起来**，标题右边写一句当前状态，一眼能看出改成什么样了。
 
 ![设置面板默认全收起](docs/screenshots/settings-collapsed.jpg)
-
-（截图里账号那行的摘要打了码，实际是你的昵称。）
 
 **账号**
 
@@ -140,40 +130,10 @@
 
 每组标题右边的「?」里写的是这一项什么时候该动，平时不用看。
 
-## 已知限制
-
-- **只支持 Folia 0.8.x**：2.0.0 改用 Folium 2 原生音源契约，不再兼容 0.7.x；宿主升级后可能需要重新适配。
-- **搜索给的是视频**，不是音乐。所以标题会带「【】」「4K」「MV」这类字样，模组会尽量洗干净，但洗不干净的情况有。
-- **探索页只有 bilibili 首页推荐**，没有「每日推荐」「私人 FM」这类东西 —— 那些接口没有。翻页与「换一批」用的是 Folia 0.7.29 之后原生的探索页控件。
-- **心形按钮只对纯数字 id 的自建收藏夹生效**，公开收藏夹是只读的。
-- **封面靠猜**：bilibili 的收藏夹接口不返回封面，模组拿夹子里第一条视频的封面顶上，所以有的夹子封面会和内容不完全对。
-- **会被限流**：短时间内反复刷墙、频繁点「换一批」，可能触发 bilibili 的 412，表现为转圈或封面空白。停下来等几分钟就好，不是坏了；封面被挡一下也不会再空白五分钟。
-- **只支持 Windows 上验证过的 Folia**，其它平台没测。
-
-## 常见问题
-
-**装好后设置里找不到模组？**
-看 `%APPDATA%\Folia\mods\bilibili\mod.json` 在不在。多套一层文件夹也可以，但 `mod.json` 必须在 `bilibili` 或者它下面唯一那层子文件夹里。
-
-**模组卡片红字报错？**
-那是 `mod.json` 校验没过，多半是改过文件或版本对不上，重新解压一份。
-
-**墙上没有卡片？**
-先看有没有登录；再看设置里「内容」两张表是不是把所有夹子都勾掉了（白名单空着会显示全部，黑名单空着也是全部）。
-
-**一直转圈 / 空白？**
-可能被限流了。等几分钟，或者去设置里「清缓存并重新读一遍」。
-
-**歌放不出声？**
-把「播放线路」改成另一个再试。有些地区直连 CDN 不通。
-
-**没有歌词？**
-视频本来就没字幕，而且没匹配到别的平台。这就是正常结果，不是 bug。
-
 ## 反馈
 
-问题和建议直接发到 [Issues](https://github.com/qingxian997/folia-bilibili-source/issues)。报问题时带上宿主版本和复现步骤就好。
+问题和建议直接发到 [Issues](https://github.com/qingxian997/folia-bilibili-source/issues)。报问题前先看一眼 [已知限制](docs/LIMITATIONS.md) 和 [常见问题](docs/FAQ.md)，带上宿主版本和复现步骤就好。
 
 ---
 
-[许可证](LICENSE)：MIT。内置二维码生成来自 [qrcode](https://github.com/soldair/node-qrcode)，同样是 MIT。
+[许可证](LICENSE)：MIT。
