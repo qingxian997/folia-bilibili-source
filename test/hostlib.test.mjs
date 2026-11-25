@@ -12,7 +12,7 @@ test('没有 DOM（Node）时打开宿主库返回 null，不抛错', async () =
 
 test('补齐能力位：auth / userLibrary / playlists 三个开关决定宿主画不画墙', () => {
     const provider = {
-        id: 'folium.bili-fav-wall.bili',
+        id: 'folium.bilibili.bili',
         capabilities: { search: true, playback: true, lyrics: true, auth: false, userLibrary: false, playlists: false },
     };
     const auth = { getLoginStatus: async () => null, logout: async () => {} };
@@ -133,7 +133,7 @@ test('拿到的不是 provider 对象就什么都不做', () => {
 });
 
 test('合集不能被当成可编辑曲目：补上 canEditPlaylistTracks 这一位', () => {
-    const provider = { id: 'folium.bili-fav-wall.bili', capabilities: {} };
+    const provider = { id: 'folium.bilibili.bili', capabilities: {} };
     const mutations = {
         likeSong: async () => {},
         updatePlaylistTracks: async () => ({ ok: true, count: 0 }),

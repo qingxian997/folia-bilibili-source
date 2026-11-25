@@ -13,7 +13,7 @@ import {
     WEB_SEASON_PREFIX,
 } from '../lib/searchCollections.mjs';
 
-const PID = 'folium.bili-fav-wall.bili';
+const PID = 'folium.bilibili.bili';
 
 const FOLDERS = [
     {

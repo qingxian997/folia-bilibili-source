@@ -106,7 +106,7 @@ provider.mutations = { likeSong };
 缺了它宿主只敢做增量合并。宿主日志里能看到：
 
 ```
-[Like] folium.bili-fav-wall.bili: liked songs read (whole, 1000 ids) applied: 0 added, 0 removed
+[Like] folium.bilibili.bili: liked songs read (whole, 1000 ids) applied: 0 added, 0 removed
 ```
 
 点赞成功后写状态是宿主自己干（`omni.ts` 的 `sendSongLike`），失败它自己回滚心形；
@@ -497,14 +497,38 @@ songsShownAs(songs)                   // 可选：把「听过的歌」映射成
 - 翻页上限（一次 read 最多 1 初始 + 4 批 / 96 首）由宿主 `useExploreWall` 负责。
   模组不再拿 explore store 自己 `loadMore()` 续命 —— 那套滚轮驱动的逻辑在 0.7.29 已移除。
 
+## Folia 0.8.0（模组系统 0.2.0）
+
+0.8.0 = Folium 2。0.9.3 先靠 1.x 兼容层跑通；**2.0.0 起改成原生 `sources` 音源**，不再借 `omni.providers`，也不再事后改宿主 provider 对象。
+
+- `mod.json`：`folium: 2`，`sources: [{ id: 'bili', requires: [...九项能力@1] }]`，`folia: >=0.8.0 <0.9.0`。旧的 `<0.8.0` 会被判成 `host-range-expired`，模组直接不加载。
+- `client.mjs`：`folium.sources.register({ id:'bili', displayName, capabilities })`。能力键必须是宿主实现并写进 `requires` 的版本化 id：`search@1 / songs@1 / playback.audio@1 / lyrics@1 / auth@1 / library@1 / catalog@1 / explore@1 / mutations@1`。
+- 形状要点：歌曲是 `{id, title, artists:[{id,name}], album:{id,name,coverUrl}, durationMs}`；分页是 `{items, hasMore, nextOffset}`；歌词是 `{main:{format:'lrc', text}}`；`explore.songsShownAs` 返回按 id 索引的**对象**（宿主自己转 Map）；`getAvailability` 返回 `{configured:boolean}`。
+- 原生音源改状态走注册句柄的 `changed()`，退出时 `unregister()`；旧 `refreshWall()` 不再需要 hostlib。
+- 主进程 RPC（登录态、搜索、音频、字幕）不变，`getAudioSource` 仍交给本机中转。
+
+### 「匹配歌词」源表换了地方（0.9.3）
+
+旧版在 `useLyricSettingsStore-*.js` 里导出一个数组 `y` 和一个 id 快照 `b`，模组把 `{id:'bili',…}` push 进去。0.8.0 那个 chunk 不再导出数组（`y` 变成字符串），注册表搬到了 `loginDiagnosticReport-*.js`：
+
+```js
+const reg = await import(chunkUrl);
+const undo = reg.h({ id: 'bili', labelKey: 'bilibili', labelFallback: 'bilibili', platform: true });
+reg.g('bili', { search, fetch, songKey });   // 取词实现
+reg._('bili', impl);                        // 撤销实现
+undo();                                     // 撤销页签声明
+```
+
+新表按 id 排序，`bili` 会排到官方那几项后面。声明的 `platform:true` 让它出现在页签行，取词仍走模组自己的 CC 字幕，不借道 omni 的跨平台匹配。文件名从入口 chunk 的依赖表现读，和旧版一样不写死哈希；找不到新注册表时不报错，只是少一个页签。
+
 ## 代码结构与边界（0.9.0，0.9.2 微调）
 
 | 位置 | 职责 | 不该做什么 |
 | --- | --- | --- |
 | `index.cjs` | 所有 bilibili 请求、Cookie、WBI 签名、音频中转、RPC 出口 | 不碰 DOM，不假定窗口存在 |
-| `client.mjs` | provider 注册、曲库交给宿主、探索取数、歌词、音质、DOM 改名 | 不直接联网，一律走 `rpc()` |
+| `client.mjs` | 原生音源注册、能力交付、探索取数、歌词、音质、DOM 改名 | 不直接联网，一律走 `rpc()` |
 | `lib/settingsPanel.mjs` | 自绘设置面板（四组、选择器、扫码、维护） | 不读 client 内部变量，只用 `deps` |
-| `lib/hostlib.mjs` | 按行为找宿主的 provider / 音源注册表 | 不写死 chunk 名，宿主改版就失效 |
+| `lib/hostlib.mjs` | 只剩 `canMutateOwnCollection` 这个纯判定（旧注册表探测代码已不再调用） | 不写死 chunk 名 |
 | `lib/*.mjs` 其它 | 纯函数：标题清洗、歌词转换、排除规则、额外列表… | 不带副作用，方便单测 |
 | `vendor/qrcode.mjs` | 二维码生成 | 不改成动不了的原样，附许可证 |
 
@@ -525,7 +549,7 @@ songsShownAs(songs)                   // 可选：把「听过的歌」映射成
 
 - `mod.json` 字段是白名单，多写一个（`homepage`、`repository`）在 Folium 2 会是错误。
 - `version` 必须三段数字，预览状态靠 GitHub pre-release 表达。
-- `folia` 范围是 `>=0.7.22 <0.8.0`；0.8.0 是 Folium 2，到那时重新适配再放开。
+- `folia` 范围是 `>=0.8.0 <0.9.0`（0.9.3 起）；0.9.0 之前是 `>=0.7.22 <0.8.0`。Folia 0.8.0 仍兼容 Folium 1 的模组接口，但宿主范围写错会被拒绝加载。
 - 改了已安装目录里的任何文件，摘要就变了，宿主的信任记录失效，会提示重新确认——这是设计，不是 bug。
 
 ### 跑测试的运行时

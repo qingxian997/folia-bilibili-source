@@ -41,9 +41,12 @@ test('二维码输出与已验证矩阵一致（OpenCV 解码通过的那一份�
     assert.equal(createHash('sha256').update(rows).digest('hex'), 'e016b60ea880723ecdd857e1620c99b69afa59f48af5971f1e88b2b06701b8b0');
 });
 
-test('清单按 Folium 1 的规则自洽', async () => {
+test('清单按 Folium 2 原生音源的规则自洽', async () => {
     const manifest = JSON.parse(await readFile(join(root, 'mod.json'), 'utf8'));
-    assert.equal(manifest.folium, 1);
+    assert.equal(manifest.folium, 2);
+    assert.ok(Array.isArray(manifest.sources) && manifest.sources.length > 0, '原生音源必须声明 sources');
+    assert.ok(manifest.sources[0].requires.includes('search@1'));
+    assert.ok(manifest.sources[0].requires.includes('playback.audio@1'));
     assert.match(manifest.id, /^[a-z0-9][a-z0-9-]*$/);
     assert.match(manifest.version, /^\d+\.\d+\.\d+$/);
     assert.ok(manifest.client, '至少要有一个入口');

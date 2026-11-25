@@ -2,11 +2,11 @@
 """打发布包。
 
     python scripts/pack.py            # 版本号读 mod.json
-    python scripts/pack.py 0.9.2      # 临时改个版本号（不会写回 mod.json）
+    python scripts/pack.py 2.0.0      # 临时改个版本号（不会写回 mod.json）
 
 产物在 dist/：
-    bili-fav-wall-<ver>.zip          只要运行需要的文件，解压到模组目录就能用
-    bili-fav-wall-<ver>-source.zip   多带 test/ 和 docs/，给别人看代码用
+    bilibili-<ver>.zip          只要运行需要的文件，解压到模组目录就能用
+    bilibili-<ver>-source.zip   多带 test/ 和 docs/，给别人看代码用
 
 用 zipfile 写正斜杠条目名：PowerShell 5.1 的 Compress-Archive 会写反斜杠，
 宿主的解压会判成「包含不安全的路径」。
@@ -73,8 +73,8 @@ def main():
     source = collect(RUNTIME_DIRS + SOURCE_EXTRA_DIRS, RUNTIME_FILES + SOURCE_EXTRA_FILES)
 
     print('版本 %s' % version)
-    build(os.path.join(out_dir, 'bili-fav-wall-%s.zip' % version), runtime)
-    build(os.path.join(out_dir, 'bili-fav-wall-%s-source.zip' % version), source)
+    build(os.path.join(out_dir, 'bilibili-%s.zip' % version), runtime)
+    build(os.path.join(out_dir, 'bilibili-%s-source.zip' % version), source)
     print('\n把上面两行 sha256 贴进 GitHub Release 说明。')
 
 

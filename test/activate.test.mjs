@@ -30,7 +30,7 @@ const install = (overrides = {}) => {
     const folium = {
         modId: 'bili-fav',
         env: { context: 'main' },
-        host: { folium: { major: 1, minor: 7 }, folia: '0.7.22' },
+        host: { folium: { major: 2, minor: 1 }, folia: '0.8.0' },
         log: { info() {}, warn() {}, error() {} },
         rpc: {
             call(name, payload) {
@@ -59,12 +59,16 @@ const install = (overrides = {}) => {
             },
             resolveSongs: (keys) => Promise.resolve(keys.map((key) => ({ status: 'found', song: { id: key.id, title: '晴天', artist: '周杰伦', source: 'folium.bili-fav.bili', ref: `song-${key.id}` } }))),
         },
-        experimental: {
-            'omni.providers': {
-                register(definition) {
-                    registered.providers.push(definition);
-                    return { id: `bili-fav:${definition.id}`, unregister() {} };
-                },
+        sources: {
+            register(definition) {
+                registered.providers.push(definition);
+                // 测试沿用以往的 provider 四件套名字，内部仍走原生能力实现。
+                const caps = definition.capabilities;
+                definition.search = (query, options) => caps['search@1'].searchSongs(query, options?.limit, options?.offset);
+                definition.getSong = caps['songs@1'].getSong;
+                definition.getAudioUrl = caps['playback.audio@1'].getAudioSource;
+                definition.getLyrics = caps['lyrics@1'].getLyrics;
+                return { id: 'folium.bilibili.bili', unregister() {}, changed() {} };
             },
         },
         registries: {
@@ -226,7 +230,7 @@ test('search 把 bilibili 标题拆成歌名与歌手，并给出 provider 形�
     const { folium, registered, calls } = install();
     const dispose = activate(folium);
     const page = await registered.providers[0].search('晴天', { limit: 20, offset: 0 });
-    assert.equal(calls[0][0], 'search');
+    assert.equal(calls.filter(([name]) => name !== 'covers')[0][0], 'search');
     assert.equal(page.items.length, 1);
     // 0.9.1：搜索交付必须带 name / sourceRef（少了宿主按 DTO 过滤掉整批，搜索页永远空），
     // 但 artists 要留在字符串形态 —— 搜索页那一行把整条 artists 当 React child 渲染，
@@ -248,8 +252,9 @@ test('search 把 bilibili 标题拆成歌名与歌手，并给出 provider 形�
 test('@fav/<media_id> 走收藏夹分页', async () => {
     const { folium, registered, calls } = activate2();
     const page = await registered.providers[0].search('@fav/12345', { limit: 20, offset: 0 });
-    assert.equal(calls[0][0], 'folderItems');
-    assert.equal(calls[0][1].mediaId, '12345');
+    const first = calls.filter(([name]) => name !== 'covers')[0];
+    assert.equal(first[0], 'folderItems');
+    assert.equal(first[1].mediaId, '12345');
     assert.equal(page.items.length, 0);
 });
 
@@ -312,7 +317,8 @@ test('选「不要歌词」时不发任何请求', async () => {
     activate(folium);
     const lyrics = await registered.providers[0].getLyrics({ id: 'BV1xx411c7mD', title: '晴天', artists: ['周杰伦'] });
     assert.equal(lyrics, null);
-    assert.equal(calls.length, 0);
+    // 启动时会读一次落盘的封面缓存，和取歌词无关。
+    assert.equal(calls.filter(([name]) => name !== 'covers').length, 0);
 });
 
 test('「显示原始标题」打开后 provider 输出 UP 主原话，歌手仍然解析', async () => {

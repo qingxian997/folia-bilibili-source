@@ -1,18 +1,35 @@
 {
-    "folium": 1,
-    "id": "bili-fav-wall",
+    "folium": 2,
+    "id": "bilibili",
     "name": "bilibili",
-    "version": "0.9.2",
+    "version": "2.0.0",
     "author": "qingxian997",
-    "description": "把 bilibili 当成一个音源用。收藏夹和 UP 主合集会变成「收藏」「合集」页签里的卡片，探索页能一直往下刷首页推荐。登录用扫码，点心形按钮就收进你选的收藏夹，歌词用视频的 CC 字幕。设置里收藏夹和合集可以各筛各的，也能把别人的公开收藏夹接进来。",
+    "description": "把 bilibili 当成一个音源：搜全站视频，收藏夹和 UP 主合集进「收藏」「合集」，歌词用视频字幕。扫码登录。",
     "main": "index.cjs",
     "client": "client.mjs",
     "permissions": [
-        "filesystem.data",
-        "playback.control"
+        "filesystem.data"
     ],
-    "experimental": [
-        "omni.providers"
+    "sources": [
+        {
+            "id": "bili",
+            "name": "bilibili",
+            "requires": [
+                "search@1",
+                "songs@1",
+                "playback.audio@1",
+                "lyrics@1",
+                "auth@1",
+                "library@1",
+                "catalog@1",
+                "explore@1",
+                "mutations@1"
+            ],
+            "keepForMatching": true,
+            "enableNotice": "把 bilibili 当成 Folia 的一个音源：扫码登录，读收藏夹和合集，视频字幕当歌词。"
+        }
     ],
-    "folia": ">=0.7.22 <0.8.0"
+    "repository": "https://github.com/qingxian997/folia-bilibili-source",
+    "bugs": "https://github.com/qingxian997/folia-bilibili-source/issues",
+    "folia": ">=0.8.0 <0.9.0"
 }

@@ -2,33 +2,24 @@
 
 [![CI](https://github.com/qingxian997/folia-bilibili-source/actions/workflows/ci.yml/badge.svg)](https://github.com/qingxian997/folia-bilibili-source/actions/workflows/ci.yml)
 
-把 bilibili 当成 [Folia](https://github.com/chthollyphile/folia-major) 里的一个普通音源：收藏夹变成「歌单」页签上的卡片，UP 主的合集会出现在「专辑」里，探索页用宿主自带的翻页和「换一批」，歌词直接取视频的 CC 字幕。
-
-界面全部由 Folia 自己画，这个模组只提供数据。
+把 bilibili 当成 [Folia](https://github.com/chthollyphile/folia-major) 里的一个音源：搜视频、听收藏夹与 UP 主合集、用视频字幕当歌词。界面由 Folia 自己画，这个模组只提供数据。
 
 > [!NOTE]
 > **这个模组只是视频音源**：把公开视频的声音、字幕和曲库信息整理成 Folia 认识的形状。它不碰番剧、电影，也不接管或替换 Folia 的视频播放功能 —— 界面和交互都遵循 Folia 的设计原则，你看到的就是一个普通的 Folia 音源。
 
 > [!WARNING]
-> **这是预览版，不是正式版。**
+> **2.0.0 是 Folium 2 原生音源。**
 >
-> 模组依赖 Folium 的 `omni.providers` 实验接口，而这个接口目前还不完整，官方也不建议拿它做完整音源。所以：
->
-> - 宿主每次更新，这里都可能**用不了或者大改**，接口一变就得跟着改；
-> - 不保证数据格式、设置项、界面位置稳定；
-> - 不会上架官方模组市场（宿主的信任检查会显示「未验证」）；
-> - **正式的 1.0 要等 Folium 2（Folia 0.8.0）**，那时接口才谈得上稳定。
->
-> 现在能用，能长期自己用，但别拿它当基础设施。
+> 模组已按 `folium: 2` 的 `sources` 契约声明能力，不再借实验接口。未经过社区审核与签名前，它仍是「未验证」的社区模组，需要开启「社区模组」开关才能安装运行。
 
-**[下载最新预览版](https://github.com/qingxian997/folia-bilibili-source/releases)** —— 下 `bili-fav-wall-0.9.2.zip`，装法见下面的[快速开始](#快速开始)。源码包在同一个页面。
+**[下载 2.0.0](https://github.com/qingxian997/folia-bilibili-source/releases)** —— 下 `bilibili-2.0.0.zip`，装法见下面的[快速开始](#快速开始)。源码包在同一个页面。
 
 | | |
 | --- | --- |
-| 宿主 | Folia 0.7.22 ~ 0.7.x（Folium 1.7 / 1.8）；**本版本针对 Folia 0.7.29 验证** |
-| 模组版本 | 0.9.2（预览） |
+| 宿主 | Folia 0.8.x（模组系统 0.2.0 / Folium 2）；**本版本针对 Folia 0.8.0 验证** |
+| 模组版本 | 2.0.0（原生音源） |
 | 许可证 | MIT |
-| 官方市场 | 不上架 |
+| 官方市场 | 需通过社区审核与签名后才可上架 |
 
 ![模组卡片](docs/screenshots/mod-card.jpg)
 
@@ -66,15 +57,19 @@
 
 ![收藏页](docs/screenshots/collection.jpg)
 
+设置页：bilibili 和其他音源一样列在「设置 → 音源」里，可以单独停用或清数据。模组自己的设置藏在这个音源的详情里。
+
+![设置页的音源列表](docs/screenshots/settings-source.jpg)
+
 ## 快速开始
 
 ### 安装
 
-1. 在 [Releases](https://github.com/qingxian997/folia-bilibili-source/releases) 下载 `bili-fav-wall-0.9.2.zip`。
-2. 解压到 Folia 的模组目录，文件夹名叫 `bili-fav-wall`：
+1. 在 [Releases](https://github.com/qingxian997/folia-bilibili-source/releases) 下载 `bilibili-2.0.0.zip`。
+2. 解压到 Folia 的模组目录，文件夹名叫 `bilibili`：
 
    ```
-   %APPDATA%\Folia\mods\bili-fav-wall\mod.json
+   %APPDATA%\Folia\mods\bilibili\mod.json
    ```
 
    （macOS / Linux 是 Electron 的 userData 目录，即 `…/Folia/mods/`。）
@@ -93,7 +88,7 @@
 
 **看收藏夹**：书库 →「歌单」。默认收藏夹、「我喜欢的音乐」、你自己建的、以及设置里贴进来的公开收藏夹，都在这一页。
 
-**刷推荐**：书库 →「探索」。一直往下滚就行，滚到宿主的自动读取停下之后，模组会接着补。
+**刷推荐**：书库 →「探索」。一直往下滚，由宿主继续读取；点「换一批」会换一组推荐。
 
 **收藏一首歌**：播放器上的心形。收进哪个夹子由设置里「「喜欢」存到哪个收藏夹」决定，默认是你的默认收藏夹。
 
@@ -147,9 +142,9 @@
 
 ## 已知限制
 
-- **依赖实验接口**：宿主更新后可能整块失效，等适配。
+- **只支持 Folia 0.8.x**：2.0.0 改用 Folium 2 原生音源契约，不再兼容 0.7.x；宿主升级后可能需要重新适配。
 - **搜索给的是视频**，不是音乐。所以标题会带「【】」「4K」「MV」这类字样，模组会尽量洗干净，但洗不干净的情况有。
-- **探索页只有 bilibili 首页推荐**，没有「每日推荐」「私人 FM」这类东西 —— 那些接口没有。翻页与「换一批」用的是 Folia 0.7.29 原生的探索页控件；更早的宿主上没有「换一批」按钮。
+- **探索页只有 bilibili 首页推荐**，没有「每日推荐」「私人 FM」这类东西 —— 那些接口没有。翻页与「换一批」用的是 Folia 0.7.29 之后原生的探索页控件。
 - **心形按钮只对纯数字 id 的自建收藏夹生效**，公开收藏夹是只读的。
 - **封面靠猜**：bilibili 的收藏夹接口不返回封面，模组拿夹子里第一条视频的封面顶上，所以有的夹子封面会和内容不完全对。
 - **会被限流**：短时间内反复刷墙、频繁点「换一批」，可能触发 bilibili 的 412，表现为转圈或封面空白。停下来等几分钟就好，不是坏了；封面被挡一下也不会再空白五分钟。
@@ -158,7 +153,7 @@
 ## 常见问题
 
 **装好后设置里找不到模组？**
-看 `%APPDATA%\Folia\mods\bili-fav-wall\mod.json` 在不在。多套一层文件夹也可以，但 `mod.json` 必须在 `bili-fav-wall` 或者它下面唯一那层子文件夹里。
+看 `%APPDATA%\Folia\mods\bilibili\mod.json` 在不在。多套一层文件夹也可以，但 `mod.json` 必须在 `bilibili` 或者它下面唯一那层子文件夹里。
 
 **模组卡片红字报错？**
 那是 `mod.json` 校验没过，多半是改过文件或版本对不上，重新解压一份。
@@ -175,53 +170,10 @@
 **没有歌词？**
 视频本来就没字幕，而且没匹配到别的平台。这就是正常结果，不是 bug。
 
-## 参与贡献
+## 反馈
 
-欢迎提 [Issue](https://github.com/qingxian997/folia-bilibili-source/issues) 和 PR。看过下面几条再来，能省掉好几轮来回。
-
-**报 Bug**：用 Bug 模板，写清三件事 —— **宿主版本**（设置 → 关于）、**复现步骤**（第几步出现、点了什么）、**你期待什么**。截图比描述快，控制台的报错比截图快。缺这几样的话，我大概率只能回一句「麻烦补一下」，然后这个 issue 就一直挂在那。
-
-**提需求之前**：先翻一眼 [已知限制](#已知限制)。「要会员才能听的」不是 bug，「全站收藏夹搜索」这条 bilibili 自己没有接口 —— 这类需求大概率不会做，但你可以先问。
-
-**提 PR**：一个 PR 只做一件事，并且在正文里写 `Closes #123` 关联对应的 Issue。没关联 Issue 的大改动我会先问清楚再合并，否则很容易白写。跑过 `npm test` 是底线，CI 也会跑。
-
-**标签怎么用**：
-
-| 标签 | 意思 |
-| --- | --- |
-| `bug` | 确认是坏了 |
-| `enhancement` | 想做但还没做的新东西 |
-| `good first issue` | 小而独立、有明确改法，第一次参与就从这里挑 |
-| `help wanted` | 我这边做不了（没设备、没账号、没那家平台的接口），需要人接 |
-| `host-update` | 换宿主版本之后才坏的，多半是宿主改了东西 |
-| `upstream` | 卡在 bilibili 或宿主那边，改不了，只能等 |
-| `needs-info` | 缺关键信息，等提问人补 |
-| `login` | 扫码、Cookie、掉号这一类 |
-
-**Review**：我会尽快回。就算不合并，也会写清楚为什么不合并 —— 要么方向不对、要么范围太大、要么宿主接口不给条件。这不是否定你写的东西。
-
-完整流程、代码约定和提交格式见 [CONTRIBUTING.md](CONTRIBUTING.md)。参与讨论即视为遵守 [行为准则](CODE_OF_CONDUCT.md)。
-
-## 卸载
-
-设置 → 模组 → 关掉开关，然后删掉 `%APPDATA%\Folia\mods\bili-fav-wall` 整个文件夹。
-登录凭据存在 Folia 自己的加密存储里，卸载模组不会自动清掉，需要的话在模组里先点「退出登录」。
-
-## 免责声明
-
-- 这不是 bilibili 官方项目，和 bilibili 没有任何关系，也没有得到官方授权。
-- 这个模组只做「把公开数据整理成 Folia 认识的形状」：搜索、读收藏夹、播视频自带的声音、取视频自带的字幕。**不提供下载，不破解付费或会员内容**，能不能播取决于你的账号和 bilibili 自己的规则。它只是视频音源，不碰番剧、电影，也不替代 Folia 的视频播放。
-- 登录凭据只存在本机，由 Folia 加密保管，模组不上传任何数据。但仍然要提醒：**用第三方客户端访问账号，风险由你自己承担**。
-- 请遵守 bilibili 的用户协议和当地法律。如果官方提出异议，这个项目会随时停止维护或删除仓库。
+问题和建议直接发到 [Issues](https://github.com/qingxian997/folia-bilibili-source/issues)。报问题时带上宿主版本和复现步骤就好。
 
 ---
-
-# 给开发者
-
-改动之前先读 [docs/HOST-CONTRACT.md](docs/HOST-CONTRACT.md)：宿主契约、踩过的坑、哪些写法不能动都在那里；版本变化写在 [docs/CHANGELOG.md](docs/CHANGELOG.md)。部署流程见 [CONTRIBUTING.md](CONTRIBUTING.md)。
-
-- 跑测试：`npm install && npm test && npm run check`（Node 22.19+，248 个用例，不需要 Folia 也不联网；`check` 会校验 `mod.json.version` 与 `client.mjs` 里的 `MOD_VERSION` 一致）。
-- 打包：`python scripts/pack.py`（版本号读 `mod.json`），产物在 `dist/`，两个包的 sha256 贴进 Release。
-- 发版：改 `mod.json`、`client.mjs` 的 `MOD_VERSION`、`package.json` 三处版本号 → CHANGELOG 加一段 → 测试全绿 → 打包 → GitHub Release 勾 **pre-release**（1.0 之前一直如此）。
 
 [许可证](LICENSE)：MIT。内置二维码生成来自 [qrcode](https://github.com/soldair/node-qrcode)，同样是 MIT。

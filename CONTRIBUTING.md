@@ -95,6 +95,6 @@ node scripts/check-manifest.mjs
 python scripts/pack.py # 产物在 dist/
 ```
 
-要装到宿主里验：把仓库根目录（含 `mod.json`）复制到 `%APPDATA%\Folia\mods\bili-fav-wall\`，**完全退出 Folia 再启动**。改过文件之后宿主的信任记录会失效，需要在模组卡片上重新确认一次。
+要装到宿主里验：把仓库根目录（含 `mod.json`）复制到 `%APPDATA%\Folia\mods\bilibili\`，**完全退出 Folia 再启动**。改过文件之后宿主的信任记录会失效，需要在模组卡片上重新确认一次。
 
 调试可以用 `--remote-debugging-port=9222` 启动 Folia，然后用 CDP 连渲染进程。诊断现场挂在 `window.__bili082`（`attached`、`exploreStoreFound`、`caps`、`watch()`）。

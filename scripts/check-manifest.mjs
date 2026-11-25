@@ -2,7 +2,7 @@
 // scripts/check-manifest.mjs
 //
 // 在 CI 里替宿主把一遍关：mod.json 写错的话，装进去只会看到一行红字，还得开 Folia 才知道。
-// 规则抄自宿主 electron/modSystem/manifest.cjs（Folium 1.8），只覆盖这个模组会碰到的字段。
+// 规则抄自宿主 electron/modSystem/manifest.cjs（Folium 2），只覆盖这个模组会碰到的字段。
 //
 // 额外查一件宿主不查的事：mod.json 的 version 和 client.mjs 里的 MOD_VERSION 必须一致，
 // 否则设置面板底部显示的版本号和模组卡片对不上，排查时非常容易看错。
@@ -14,14 +14,21 @@ import process from 'node:process';
 const ROOT = path.resolve(import.meta.dirname, '..');
 const errors = [];
 
-const FOLIUM_MAJOR = 1;
+const FOLIUM_MAJOR = 2;
 const MOD_ID = /^[a-z0-9][a-z0-9-]*$/;
+const SOURCE_ID = /^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/;
 const VERSION = /^([0-9]+)\.([0-9]+)\.([0-9]+)$/;
 
-// 宿主认识的全部字段（多写一个在 Folium 2 里是错误，现在只是警告）
+// 宿主认识的全部字段；Folium 2 里多写一个就是错误。
 const FIELDS = new Set([
     'folium', 'id', 'name', 'version', 'author', 'description', 'main', 'client',
     'depends', 'permissions', 'experimental', 'embedOrigins', 'folia', 'preview',
+    'sources', 'locales', 'assets', 'secrets', 'contexts', 'native', 'repository', 'bugs',
+]);
+const CAPABILITIES = new Set([
+    'search', 'songs', 'playback.audio', 'playback.external', 'playback.surface',
+    'reports', 'lyrics', 'auth', 'library', 'catalog', 'recommendations',
+    'explore', 'mutations', 'covers', 'raw',
 ]);
 
 // foliumShared.json 里的权限与实验位
@@ -97,7 +104,23 @@ if (!manifest || typeof manifest !== 'object' || Array.isArray(manifest)) {
     }
 
     if (manifest.folia && !checkHostRange(manifest.folia)) {
-        errors.push(`folia 版本范围写法不对："${manifest.folia}"（例：">=0.7.22 <0.8.0"）`);
+        errors.push(`folia 版本范围写法不对："${manifest.folia}"（例：">=0.8.0 <0.9.0"）`);
+    }
+
+    if (!Array.isArray(manifest.sources) || manifest.sources.length === 0) {
+        errors.push('folium:2 音源模组必须用 sources 列出至少一个音源');
+    } else {
+        for (const source of manifest.sources) {
+            if (!source || !SOURCE_ID.test(String(source.id || ''))) errors.push('sources[].id 必须是字母数字开头的最多 64 字符 id');
+            const requires = source.requires === undefined ? [] : source.requires;
+            if (!Array.isArray(requires)) errors.push('sources[].requires 必须是数组');
+            else for (const capability of requires) {
+                const match = /^([a-z][a-z0-9.-]*)@([1-9][0-9]*)$/.exec(String(capability));
+                if (!match || !CAPABILITIES.has(match[1]) || match[2] !== '1') {
+                    errors.push(`sources[].requires 里的 "${capability}" 不是宿主实现的能力`);
+                }
+            }
+        }
     }
 
     // 权限声明了却从没用过，等于在信任弹窗里多要一项，属于过度授权。

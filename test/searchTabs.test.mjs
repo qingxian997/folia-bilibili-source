@@ -8,7 +8,7 @@ import { JSDOM } from 'jsdom';
 import { activeSearchSourceLabel, searchContextOf, createBiliTabPredicate } from '../lib/searchTabs.mjs';
 import { createTabRelabel } from '../lib/tabLabel.mjs';
 
-const PID = 'folium.bili-fav-wall.bili';
+const PID = 'folium.bilibili.bili';
 
 function page(activeSource = 'bilibili') {
     const dom = new JSDOM(

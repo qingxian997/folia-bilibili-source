@@ -1,4 +1,4 @@
-// mods/bili-fav-wall/client.mjs
+// mods/bilibili/client.mjs
 // bilibili 收藏夹音源：把收藏夹交给宿主自己画。
 //
 // 以前的版本是「自绘一层墙」（DOM 注入磁贴），闪烁、胶囊、书脊重叠、方向键失灵全来自那一层。
@@ -11,7 +11,7 @@ import qrcode from './vendor/qrcode.mjs';
 
 import { parseVideoTitle, normalizeForMatch } from './lib/title.mjs';
 import { subtitleToLines, subtitleToLrc, omniLyricsToTracks, fillMissingWords } from './lib/lrc.mjs';
-import { openHostLibrary, attachLibrary, canMutateOwnCollection } from './lib/hostlib.mjs';
+import { canMutateOwnCollection } from './lib/hostlib.mjs';
 import {
     FOLDER_PAGE_SIZE,
     videoToSong,
@@ -51,14 +51,14 @@ const HOST_LYRIC_ORDER = ['netease', 'qq', 'kugou'];
 /** 宿主用它画音源徽标：bilibili 的粉。 */
 const BILI_PINK = '#FB7299';
 /** 面板上显示的版本号，和 mod.json 保持一致（打包校验会盯这一条）。 */
-const MOD_VERSION = '0.9.2';
+const MOD_VERSION = '2.0.0';
 /** 批量改收藏夹时每首之间的间隔：fav/resource/deal 连发几十个必吃 -412。 */
 const ADD_INTERVAL_MS = 250;
 
 export default function activate(folium) {
     if (folium.env.context !== 'main') return;
-    if (!folium.omni || folium.host.folium.minor < 7) {
-        throw new Error('bilibili 收藏夹需要 Folium 1.7（Folia 0.7.22 及以上）');
+    if (!folium.sources || folium.host.folium.major < 2) {
+        throw new Error('bilibili 原生音源需要 Folium 2（Folia 0.8.0 及以上）');
     }
 
     const rpc = (name, payload) => folium.rpc.call(name, payload || {});
@@ -117,28 +117,11 @@ export default function activate(folium) {
 
     // ------------------------------------------------------------ provider
 
-    const handle = folium.experimental['omni.providers'].register({
-        id: 'bili',
-        displayName: 'bilibili',
-        shortName: 'bilibili',
-        search: (query, page) => search(query, page),
-        getSong: (id) => getSong(id),
-        getAudioUrl: (song, quality) => getAudioUrl(song, quality),
-        getLyrics: (song) => getLyrics(song),
-    });
+    // 原生音源的宿主 id：manifest 里 sources[0].id = bili，模组 id = bilibili。
+    let providerId = `folium.${folium.modId}.bili`;
+    let sourceHandle = null;
 
-    let providerId = '';
-
-    /** 宿主把 provider id 命名成什么，以 listProviders 为准（注册表返回的是条目 id）。 */
     function myProviderId() {
-        if (providerId) return providerId;
-        try {
-            const mine = folium.omni.listProviders().find((item) => item.origin === 'mod' && String(item.providerId).includes(folium.modId));
-            if (mine) providerId = mine.providerId;
-        } catch (error) {
-            log.warn('bili: listProviders failed', String(error && error.message));
-        }
-        if (!providerId) providerId = `folium.${folium.modId}.bili`;
         return providerId;
     }
 
@@ -655,6 +638,9 @@ export default function activate(folium) {
     const LYRIC_TABLE_SIZE = 6;
 
     let lyricChunk = { url: '' };
+    // Folia 0.8.0 把歌词源表搬到了另一个 chunk，改成 register() 注册：
+    // 这里单独缓存它的文件名，别和旧表的缓存串在一起。
+    let lyricRegistryChunk = { url: '' };
     let lyricSource = null; // { meta, table, ids, restore() }
     /**
      * 安装代数。`import()` 是异步的，装到一半可能已经被卸载了，那时候得自己收尾；
@@ -756,6 +742,93 @@ export default function activate(folium) {
     }
 
     /**
+     * Folia 0.8.0 的新歌词源注册表在 loginDiagnosticReport-*.js 里：
+     *   h(声明) → 返回撤销函数；g(id, 实现) / _(id, 实现) → 注册 / 撤销取词实现。
+     * 文件名一样从入口 chunk 现读，不写死哈希。
+     */
+    async function lyricRegistryUrl() {
+        if (lyricRegistryChunk.url) return lyricRegistryChunk.url;
+        if (typeof document === 'undefined' || !document.baseURI) return '';
+        try {
+            const script = document.querySelector('script[type="module"][src]');
+            if (!script || !script.src || typeof fetch !== 'function') return '';
+            const text = await (await fetch(script.src)).text();
+            const hit = text.match(/loginDiagnosticReport-[A-Za-z0-9_-]+\.js/);
+            if (!hit) {
+                note('入口 chunk 里没有 0.8.0 歌词注册表', { entry: script.src });
+                return '';
+            }
+            lyricRegistryChunk.url = new URL(`./assets/${hit[0]}`, document.baseURI).href;
+            note('认出 0.8.0 歌词注册表', { name: hit[0], url: lyricRegistryChunk.url });
+        } catch (error) {
+            note('读 0.8.0 歌词注册表失败', String(error && error.message));
+        }
+        return lyricRegistryChunk.url;
+    }
+
+    /** 0.8.0：register() 路线，声明一个歌词源页签，再把搜索 / 取词实现挂上去。 */
+    async function installLyricSource080(generation) {
+        const url = await lyricRegistryUrl();
+        if (!url) return false;
+        let reg = null;
+        try {
+            reg = await import(url);
+            note('import 0.8.0 歌词注册表成功', { keys: Object.keys(reg || {}).length });
+        } catch (error) {
+            note('import 0.8.0 歌词注册表失败', String(error && error.message));
+            return false;
+        }
+        if (typeof reg?.h !== 'function' || typeof reg?.g !== 'function' || typeof reg?._ !== 'function') {
+            note('0.8.0 歌词注册表形状不认识', { keys: Object.keys(reg || {}).slice(0, 20) });
+            return false;
+        }
+
+        const meta = {
+            id: LYRIC_SOURCE_ID,
+            labelKey: 'bilibili',
+            labelFallback: 'bilibili',
+            platform: true,
+        };
+        const impl = {
+            search: (query, limit) => lyricSearch(query, limit),
+            fetch: (song) => lyricFetch(song),
+            songKey: (song) => String((song && song.id) || ''),
+        };
+
+        let undoDeclare = null;
+        try {
+            undoDeclare = reg.h(meta);
+            reg.g(LYRIC_SOURCE_ID, impl);
+        } catch (error) {
+            try { if (typeof undoDeclare === 'function') undoDeclare(); } catch { /* 没装上 */ }
+            note('0.8.0 歌词源注册失败', String(error && error.message));
+            return false;
+        }
+
+        // import 是异步的：装到一半可能已经停用、甚至又装了一轮，这一份要自己拆干净。
+        if (generation !== lyricGeneration) {
+            try { reg._(LYRIC_SOURCE_ID, impl); } catch { /* 没装上 */ }
+            try { if (typeof undoDeclare === 'function') undoDeclare(); } catch { /* 没装上 */ }
+            note('0.8.0 歌词源装好时已过时，就地拆掉', { generation, current: lyricGeneration });
+            return false;
+        }
+
+        lyricSource = {
+            meta,
+            table: null,
+            ids: null,
+            metaMap: null,
+            restore: () => {
+                try { reg._(LYRIC_SOURCE_ID, impl); } catch { /* 已经撤掉了 */ }
+                try { if (typeof undoDeclare === 'function') undoDeclare(); } catch { /* 已经撤掉了 */ }
+            },
+        };
+        lyricDiag.ok = true;
+        note('已注册到 0.8.0 歌词源表', { sources: Array.isArray(reg.c) ? reg.c.map((x) => x && x.id) : null });
+        return true;
+    }
+
+    /**
      * omni 交回来的是「统一搜索结果」：{ id, title, artist(字符串), album(字符串), source, ref }。
      * 但「匹配歌词」窗口把每条结果当成宿主歌曲对象用——`Lm` 读 `name`、打分函数 `Es`
      * 读 `name` / `artists[].name` / `album.name` / `durationMs`，`rj` 保存时读同一批字段。
@@ -819,14 +892,8 @@ export default function activate(folium) {
         if (!id) return null;
         const found = await ccTrack({ ...song, id });
         if (!found || !found.lines.length) return null;
-        return {
-            lyrics: {
-                lines: found.lines,
-                isPureMusic: false,
-                isWordByWord: false,
-            },
-            isPureMusic: false,
-        };
+        // 0.8.0 的歌词注册表按宿主原生形状收：main 是一条 lrc 轨。
+        return { main: found.track, isPureMusic: false };
     }
 
     /**
@@ -834,7 +901,7 @@ export default function activate(folium) {
      *
      * 旧版把 CC 字幕行直接交给宿主，行里只有 startTime / endTime / fullText，
      * 宿主把这份歌词写进了自己的 metadata_cache（key 形如
-     * `lyric_online:folium.bili-fav-wall.bili:<bvid>_state`，歌词在 `data.onlineOverrideLyrics.lines`）。
+     * `lyric_online:folium.bilibili.bili:<bvid>_state`，歌词在 `data.onlineOverrideLyrics.lines`）。
      * 之后每次播到那首歌，宿主歌词模型 `monetLyricsModel` 的 `G(line)` 第一句就是
      * `line.words.length`，键不在就抛 TypeError——而它跑在 React 渲染期间，
      * 异常直接把整棵树卸载掉：**整个窗口变白、点什么都没反应**。
@@ -842,7 +909,9 @@ export default function activate(folium) {
      * 现在 `subtitleToLines` 每行都带 `words: []`，但已经落盘的旧记录不会自己变。
      * 这里给它们补上，幂等，跑过一次就记标记，不再扫库。
      */
-    const LYRIC_CACHE_REPAIR_KEY = 'bili:lyric-cache-repair:v1';
+    const LYRIC_CACHE_REPAIR_KEY = 'bili:lyric-cache-repair:v2';
+    /** 1.0.0 改名前的 provider id：老缓存仍按这个前缀存着，不补会白屏。 */
+    const LEGACY_PROVIDER_ID = 'folium.bili-fav-wall.bili';
 
     function repairLegacyLyricCache() {
         if (typeof indexedDB === 'undefined') return;
@@ -852,12 +921,7 @@ export default function activate(folium) {
             // 拿不到 localStorage 就别动宿主数据，下次启动再试
             return;
         }
-        let prefix = '';
-        try {
-            prefix = `lyric_online:${myProviderId()}:`;
-        } catch {
-            return;
-        }
+        const prefixes = [`lyric_online:${myProviderId()}:`, `lyric_online:${LEGACY_PROVIDER_ID}:`];
 
         let request;
         try {
@@ -901,7 +965,7 @@ export default function activate(folium) {
                 const cursor = event.target.result;
                 if (!cursor) return;
                 const key = String(cursor.key || '');
-                if (key.startsWith(prefix)) {
+                if (prefixes.some((prefix) => key.startsWith(prefix))) {
                     const record = cursor.value;
                     const lyrics = record && record.data && record.data.onlineOverrideLyrics;
                     const lines = lyrics && Array.isArray(lyrics.lines) ? lyrics.lines : null;
@@ -946,8 +1010,11 @@ export default function activate(folium) {
         // 不是它。所以拿不到就靠下面拦 Map.prototype 的办法顶上。
         const metaMap = mod && mod.w instanceof Map ? mod.w : null;
         if (!Array.isArray(table)) {
+            // Folia 0.8.0：表从 useLyricSettingsStore 搬走，改成声明注册表。
+            note('旧歌词源表不是数组，改试 0.8.0 的注册表');
+            if (await installLyricSource080(generation)) return true;
             log.warn('bili: 宿主歌词源表结构变了，跳过注册');
-            note('宿主歌词源表不是数组，可能是宿主改版了');
+            note('两种歌词源表都不认识，可能是宿主改版了');
             return false;
         }
 
@@ -2447,15 +2514,102 @@ export default function activate(folium) {
         fallbackSettings: () => section.settings,
     });
 
-    // ------------------------------------------------- 把曲库交给宿主
+    // ------------------------------------------------- 注册 Folium 2 原生音源
 
-    const hostRef = { value: null };
+    /**
+     * 原生音源自己声明能力，不用再去改宿主 provider 对象。
+     * 能力名带 @1，和 foliumShared.json 的能力版本表对齐。
+     */
+    try {
+        sourceHandle = folium.sources.register({
+            id: 'bili',
+            displayName: 'bilibili',
+            shortName: 'bilibili',
+            mark: { letter: 'B', color: BILI_PINK },
+            getAvailability: () => (readProfile()
+                ? { configured: true }
+                : { configured: false, reason: 'not-configured', message: '扫码登录后可用' }),
+            capabilities: {
+                'search@1': {
+                    searchSongs: (query, limit, offset) => search(query, { limit, offset }),
+                    searchAlbums: (query, limit, offset) => searchAlbums(query, limit, offset),
+                    searchPlaylists: (query, limit, offset) => searchPlaylists(query, limit, offset),
+                },
+                'songs@1': { getSong },
+                'playback.audio@1': {
+                    audioQualityLevels: ['standard', 'high', 'lossless'],
+                    getAudioSource: getAudioUrl,
+                },
+                'lyrics@1': { getLyrics },
+                'auth@1': {
+                    getLoginStatus: auth.getLoginStatus,
+                    logout: auth.logout,
+                    startLogin: auth.startLogin,
+                    createQr: auth.createQr,
+                    checkLogin: auth.checkLogin,
+                    cancelLogin: auth.cancelLogin,
+                },
+                'library@1': {
+                    getUserPlaylists,
+                    getUserAlbums,
+                    getLikedSongIds,
+                },
+                'catalog@1': {
+                    getPlaylistTracks,
+                    getPlaylistDetail,
+                    getAlbumTracks,
+                    getAlbumDetail,
+                },
+                'explore@1': {
+                    getFeed: getExploreFeed,
+                    getSectionItems: getExploreSectionItems,
+                    // 原生契约收的是按 id 索引的对象，宿主自己转成 Map。
+                    songsShownAs: (songs) => {
+                        const shown = {};
+                        for (const song of (Array.isArray(songs) ? songs : [])) {
+                            const id = song && (song.id || (song.sourceRef && song.sourceRef.mediaId));
+                            if (id) shown[String(id)] = song;
+                        }
+                        return shown;
+                    },
+                },
+                'mutations@1': {
+                    likeSong,
+                    updatePlaylistTracks,
+                    canAddToPlaylist,
+                    canEditPlaylistTracks: canAddToPlaylist,
+                },
+            },
+        });
+        providerId = sourceHandle.id || providerId;
+        // 原生注册不再走旧的 attachToHost()，这里得自己把落盘的封面缓存读回来；
+        // 少了这一步，第一次画墙时 covers 是空的，卡片就没有封面。
+        void loadCovers().then(() => {
+            if (sourceHandle) sourceHandle.changed();
+        });
+    } catch (error) {
+        log.warn('bili: 原生音源注册失败', String(error && error.message));
+        toast(t('bilibili 没能注册成音源，请重启 Folia 再试。', 'bilibili could not register as a source; restart Folia.'), 'warning');
+    }
+
+    // 客户端日志不进宿主日志文件，真机排查把现场挂到 window 上给 CDP 读。
+    try {
+        if (typeof window !== 'undefined') {
+            window.__bili081 = {
+                version: MOD_VERSION,
+                attached: Boolean(sourceHandle),
+                caps: { explore: true, recommendations: false },
+                lastFeed: null,
+                biliActive: isBiliActive(),
+            };
+            window.__bili082 = window.__bili081;
+        }
+    } catch { /* 诊断现场不该影响功能 */ }
+
     /** 宿主重读一次这个源：墙面跟着账户数据重画。 */
     async function refreshWall() {
-        if (disposed) return;
-        const host = hostRef.value;
-        if (!host) return;
-        await host.refreshAccount(myProviderId());
+        if (disposed || !sourceHandle) return;
+        sourceHandle.changed();
     }
 
     /**
@@ -2489,102 +2643,6 @@ export default function activate(folium) {
         }, delay);
     }
 
-    let attaching = false;
-    async function attachToHost(attempt = 0) {
-        if (hostRef.value || attaching) return;
-        attaching = true;
-        try {
-            const host = await openHostLibrary({ log });
-            if (!host) return;
-            // openHostLibrary 要连着 import 十几个 chunk，这么长时间里完全可能已经被停用。
-            // 那时 dispose() 已经把监听骨架拆掉了，再往下走会新挂一批永不释放的
-            // wheel / scroll / touchmove 监听，用户每滚一下还在让宿主继续加载。
-            if (disposed) return;
-            const id = myProviderId();
-            const provider = host.provider(id);
-            if (!provider) {
-                // 注册刚发生、宿主还没把它放进注册表：等一下再试。
-                if (attempt < 6) {
-                    hostRef.value = null;
-                    attaching = false;
-                    later(() => void attachToHost(attempt + 1), 350);
-                    return;
-                }
-                log.warn('bili: 宿主里找不到本模组的音源', id);
-                // 不静默：宿主启动慢一点、首帧还没把注册表建好时，书库墙会永久空白，
-                // 用户只会以为「模组坏了」。给一条能自己动手的提示。
-                toast(t('bilibili 还没接上。在命令面板跑一次「bilibili：重新接入」再试。',
-                    'bilibili is not attached to the host library yet. Run “bilibili: reattach library” from the command palette to retry.'), 'warning');
-                return;
-            }
-            const wired = attachLibrary(provider, {
-                auth,
-                library: { getUserPlaylists, getUserAlbums, getLikedSongIds },
-                catalog: { getPlaylistTracks, getPlaylistDetail, getAlbumTracks, getAlbumDetail },
-                mutations: { likeSong, updatePlaylistTracks, canAddToPlaylist },
-                search: { searchAlbums, searchPlaylists },
-                // 0.8.1：**不挂 recommendations**。宿主 canUseRadio 会因此为 false，
-                // 键盘循环页签会跳过「推荐」；界面上那颗胶囊由 lib/homeTab.mjs 在
-                // bilibili 是当前音源时藏掉，切到别的音源自动还原。
-                // 「探索」页签：宿主原生歌曲卡，翻页与换一批都由宿主负责。能力位在
-                // attachLibrary() 里一起打开，设置页「显示探索」才亮。
-                explore: {
-                    getFeed: getExploreFeed,
-                    getSectionItems: getExploreSectionItems,
-                    // 宿主用它把「听过的歌」重新登记成「墙上展示的歌」，换一批时据此避开。
-                    // 0.7.29 的 Bn() 期待返回 **Map<id, song>**（会调 .size/.get/.has），
-                    // 不是数组 —— 返回数组会报 `a.get is not a function`，seed 就永远记不上。
-                    // 我们展示即播放：把每首按 id 建进 Map 即可（与 YTM provider 的形状一致）。
-                    songsShownAs: (songs) => {
-                        const map = new Map();
-                        for (const song of (Array.isArray(songs) ? songs : [])) {
-                            const id = song && (song.id || (song.sourceRef && song.sourceRef.mediaId));
-                            if (id) map.set(String(id), song);
-                        }
-                        return map;
-                    },
-                },
-                // 只有三档是真实不同的：64K / 192K / FLAC。宿主默认还列一个 hires，
-                // 但 bilibili 没有比 FLAC 更高的档，选它和选无损听到的是同一个流。
-                playback: { audioQualityLevels: ['standard', 'high', 'lossless'] },
-                mark: { letter: 'B', color: BILI_PINK },
-            });
-            if (!wired) {
-                // 冻结 / 改形状时不静默：宁可让用户看到一句提示，也不要书库墙空白还查不出原因
-                toast(t('bilibili 没能接上（宿主版本可能变了），搜索和播放还能用',
-                    'bilibili could not attach to the host library; search and playback still work'), 'warning');
-                log.warn('bili: attachLibrary 返回 false，宿主 provider 可能被冻结');
-                return;
-            }
-            hostRef.value = host;
-            // 客户端日志不进宿主日志文件，真机排查把现场挂到 window 上给 CDP 读。
-            try {
-                if (typeof window !== 'undefined') {
-                    window.__bili081 = {
-                        version: MOD_VERSION,
-                        attached: true,
-                        caps: {
-                            explore: Boolean(provider.capabilities && provider.capabilities.explore),
-                            recommendations: Boolean(provider.capabilities && provider.capabilities.recommendations),
-                        },
-                        // 最近一次给宿主喂了什么，换一批的真机核验读这个。
-                        lastFeed: null,
-                        biliActive: isBiliActive(),
-                    };
-                    // 0.8.2 起的新名字；旧名保留，历史验证脚本继续能读。
-                    window.__bili082 = window.__bili081;
-                }
-            } catch { /* 诊断现场不该影响功能 */ }
-            covers = await loadCovers();
-            await host.refreshAccount(id);
-        } catch (error) {
-            log.warn('bili: 接管宿主曲库失败', String(error && error.message));
-        } finally {
-            attaching = false;
-        }
-    }
-
-    void attachToHost();
 
     // 0.7.6 及更早写进宿主缓存的歌词缺 words，播到那首歌会让整个窗口崩掉；
     // 启动后延迟一点补上（等宿主自己的 DB 连接先建好，避免抢锁）。
@@ -2689,22 +2747,19 @@ export default function activate(folium) {
         log.warn('bili: 注册歌词源失败', String(error && error.message));
     });
 
-    /** 接入失败后的手动重试：宿主启动顺序偶尔会比模组晚一步，不必为此重载整个模组。 */
+    /** 让宿主重新读一次音源声明（换了登录态或卡片数据时用）。 */
     const reattachCommand = folium.registries.commands.register({
         id: 'reattach',
         label: { 'zh-CN': 'bilibili：重新接入', en: 'bilibili: reattach' },
         keywords: ['bilibili', '曲库', '接入', '重试', 'library', 'attach', 'retry'],
         run: async () => {
-            hostRef.value = null;
-            attaching = false;
-            await attachToHost();
-            if (hostRef.value) {
-                toast(t('接上了。', 'Attached.'), 'success');
-                return 'ok';
+            if (!sourceHandle) {
+                toast(t('还没注册成音源。重启 Folia 再试一次。', 'Not registered as a source yet; restart Folia.'), 'warning');
+                return 'unavailable';
             }
-            toast(t('还是没接上。重启 Folia 再试一次。',
-                'Still not attached; the host internals may have changed. Restart Folia and try again.'), 'warning');
-            return 'unavailable';
+            sourceHandle.changed();
+            toast(t('已让宿主重读 bilibili。', 'Asked the host to reload bilibili.'), 'success');
+            return 'ok';
         },
     });
 
@@ -2719,11 +2774,6 @@ export default function activate(folium) {
             /* 已经撤下 */
         }
         offPlaybackFailed = null;
-        try {
-            handle.unregister();
-        } catch {
-            /* 已经撤下 */
-        }
         openCommand.unregister();
         loginCommand.unregister();
         refreshCommand.unregister();
@@ -2758,6 +2808,7 @@ export default function activate(folium) {
         folderCache.clear();
         qrKeys.clear();
         exploreFlights.clear();
-        hostRef.value = null;
+        try { if (sourceHandle) sourceHandle.unregister(); } catch { /* 已经撤掉了 */ }
+        sourceHandle = null;
     };
 }

@@ -17,7 +17,7 @@ globalThis.HTMLElement = dom.window.HTMLElement;
 globalThis.Node = dom.window.Node;
 globalThis.Event = dom.window.Event;
 
-const PROVIDER = 'folium.bili-fav-wall.bili';
+const PROVIDER = 'folium.bilibili.bili';
 const SONG_ID = 'BV1mUAzeWEkr';
 
 const install = ({ song = null, settings = {}, signedIn = true, lyricsMissFirst = false, emptySubtitles = false, folders = null } = {}) => {
@@ -70,9 +70,9 @@ const install = ({ song = null, settings = {}, signedIn = true, lyricsMissFirst 
     };
 
     const folium = {
-        modId: 'bili-fav-wall',
+        modId: 'bilibili',
         env: { context: 'main' },
-        host: { folium: { major: 1, minor: 7 }, folia: '0.7.25' },
+        host: { folium: { major: 2, minor: 1 }, folia: '0.8.0' },
         log: { info() {}, warn() {}, error() {} },
         rpc: {
             call(name, payload) {
@@ -109,7 +109,13 @@ const install = ({ song = null, settings = {}, signedIn = true, lyricsMissFirst 
                 });
             },
         },
-        experimental: { 'omni.providers': { register: (definition) => { registered.provider = definition; return { unregister() {} }; } } },
+        sources: {
+            register: (definition) => {
+                registered.provider = definition;
+                registered.provider.getLyrics = definition.capabilities['lyrics@1'].getLyrics;
+                return { id: 'folium.bilibili.bili', unregister() {}, changed() {} };
+            },
+        },
         registries: {
             settingsSections: {
                 register(definition) {
@@ -372,16 +378,10 @@ test('歌词源：选中一条之后只取 CC 字幕，不借第三方歌词', a
 
     assert.equal(calls.omniLyrics, 0, '完全没问 omni 取词，第三方歌词匹配不会掺进来');
     assert.ok(calls.names.includes('subtitles'), '只问了 CC 字幕');
-    assert.deepEqual(got.lyrics.lines, [
-        { startTime: 1, endTime: 2, fullText: '第一句', words: [] },
-        { startTime: 3, endTime: 4, fullText: '第二句', words: [] },
-    ], '给的就是字幕逐行内容（words 空数组是宿主歌词模型的硬要求）');
-    assert.equal(
-        got.lyrics.lines.some((line) => line.translation || line.romanization),
-        false,
-        '没有翻译/罗马音，不是网易云那套词',
-    );
-    assert.equal(got.lyrics.isWordByWord, false);
+    // 0.8.0 的歌词注册表按宿主原生形状收一条 lrc 轨；
+    // 逐行的 words 由宿主的歌词解析器补齐，模组不再自己塞 words。
+    assert.equal(got.main.format, 'lrc');
+    assert.equal(got.main.text, '[00:01.000]第一句\n[00:03.000]第二句');
     assert.equal(got.isPureMusic, false);
 
     dispose();

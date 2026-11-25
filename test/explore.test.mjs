@@ -14,7 +14,7 @@ const song = (id) => ({
     artists: [{ id: `${id}#artist`, name: 'UP' }],
     album: { id: `${id}#album`, name: '', coverUrl: `https://i0.hdslb.com/${id}.jpg` },
     durationMs: 200000,
-    sourceRef: { kind: 'online', providerId: 'folium.bili-fav-wall.bili', mediaId: id },
+    sourceRef: { kind: 'online', providerId: 'folium.bilibili.bili', mediaId: id },
 });
 
 test('游标是宿主认得不透明字符串，也要能解回 fresh_idx', () => {

@@ -84,7 +84,7 @@ test('手贴的合集和账号收藏的同一个合集只留一条', () => {
 });
 
 test('收藏夹落到 playlist，合集与系列落到 album', () => {
-    const pid = 'folium.bili-fav-wall.bili';
+    const pid = 'folium.bilibili.bili';
     const own = toCollection(normalizeOwn({ id: '1', title: '自建', count: 2, isDefault: true }, '我', '9', 'https://c.jpg'), pid);
     assert.equal(own.type, 'playlist');
     assert.equal(own.id, '1');
@@ -130,7 +130,7 @@ test('三个来源合流：收藏夹进歌单、合集与系列进专辑，重�
     assert.equal(lib.byKey.size, 6);
     assert.equal(lib.folders.length, 1);
 
-    const pid = 'folium.bili-fav-wall.bili';
+    const pid = 'folium.bilibili.bili';
     assert.deepEqual(lib.playlists.map((raw) => toCollection(raw, pid).type), ['playlist', 'playlist', 'playlist']);
     assert.deepEqual(lib.albums.map((raw) => toCollection(raw, pid).type), ['album', 'album', 'album']);
     // 自建收藏夹的封面来自主进程的封面缓存

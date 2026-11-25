@@ -6,7 +6,7 @@ import assert from 'node:assert/strict';
 import * as recommend from '../lib/recommend.mjs';
 import { videoToSong } from '../lib/collections.mjs';
 
-const PROVIDER = 'folium.bili-fav-wall.bili';
+const PROVIDER = 'folium.bilibili.bili';
 const liked = { bvid: 'BV1aaaaaaaa', title: '第一首', author: 'UP甲', cover: 'https://i0.hdslb.com/a.jpg', durationMs: 200000 };
 
 test('0.8.1 推荐层只剩「我喜欢的音乐」和旧卡兜底，不再有 8 张入口卡', () => {

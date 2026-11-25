@@ -13,7 +13,7 @@ import {
     FOLDER_PAGE_SIZE,
 } from '../lib/collections.mjs';
 
-const PROVIDER = 'folium.bili-fav-wall.bili';
+const PROVIDER = 'folium.bilibili.bili';
 
 test('收藏夹 → 歌单卡：providerId / type / 曲目数 / 封面都按宿主的字段来', () => {
     const collections = foldersToCollections(

@@ -84,6 +84,24 @@ module.exports = function activate(api) {
 
     // ---------------------------------------------------------------- cookie
 
+    // 1.0.0 从 bili-fav-wall 改名。旧目录里的加密凭据和设置是按字节存的、
+    // 不绑模组 id，搬到新目录就能接着用；不搬的话用户升级后会被要求重新扫码。
+    // 只在凭据确实不存在时搬一次，绝不覆盖新目录里已有的数据。
+    try {
+        const here = path.dirname(api.storage.paths.data); // mods-data/bilibili
+        const old = path.join(path.dirname(here), 'bili-fav-wall');
+        for (const file of ['secrets.json', 'mod-data.json']) {
+            const from = path.join(old, file);
+            const to = path.join(here, file);
+            if (!fs.existsSync(to) && fs.existsSync(from)) {
+                fs.copyFileSync(from, to);
+                api.log.info(`bili: 从旧模组目录迁移了 ${file}`);
+            }
+        }
+    } catch (error) {
+        api.log.warn('bili: 迁移旧模组数据失败', String(error && error.message));
+    }
+
     // 存哪、怎么回读校验都在 lib/store.cjs；这里只管把它同步到内存里的 state。
     const cookies = createCookieStore(api);
 
