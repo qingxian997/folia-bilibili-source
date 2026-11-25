@@ -393,9 +393,29 @@ module.exports = function activate(api) {
         if (cached && Date.now() - cached.at < 10 * 60 * 1000) return cached.data;
         const json = await getJson(`${API}/x/web-interface/view?bvid=${encodeURIComponent(bvid)}`);
         if (!json || json.code !== 0) throw new Error(`bili: ${(json && json.message) || '视频不存在'}`);
-        state.views.set(bvid, { at: Date.now(), data: json.data });
+        const data = json.data || {};
+        // 有些视频的 view 响应不带 pages（实测「八爷全部MV合集」就是），
+        // 但 pagelist 仍给完整分 P。没有这一步，这类视频就永远只显示整段时长、不拆 P。
+        const have = Array.isArray(data.pages) ? data.pages.length : 0;
+        if (have < 2) {
+            try {
+                const list = await getJson(`${API}/x/player/pagelist?bvid=${encodeURIComponent(bvid)}`);
+                const rows = (list && list.code === 0 && Array.isArray(list.data)) ? list.data : [];
+                if (rows.length > have) {
+                    data.pages = rows.map((page) => ({
+                        page: Number(page && page.page) || 0,
+                        cid: page && page.cid,
+                        part: String((page && page.part) || ''),
+                        duration: Number((page && (page.duration || page.length)) || 0),
+                    })).filter((page) => page.page > 0);
+                }
+            } catch {
+                /* pagelist 也读不到就沿用 view 的原样结果，不影响播放 */
+            }
+        }
+        state.views.set(bvid, { at: Date.now(), data });
         if (state.views.size > 300) state.views.delete(state.views.keys().next().value);
-        return json.data;
+        return data;
     }
 
     function splitId(id) {
@@ -433,21 +453,26 @@ module.exports = function activate(api) {
             cover: cover(view.pic),
             durationMs: (Number(view.duration) || 0) * 1000,
             pubdate: (Number(view.pubdate) || 0) * 1000,
-            pages: (view.pages || []).map((page) => ({ page: page.page, cid: page.cid, part: page.part })),
+            pages: (view.pages || []).map((page) => ({
+                page: page.page,
+                cid: page.cid,
+                part: page.part,
+                durationMs: (Number(page.duration) || 0) * 1000,
+            })),
         };
     }
 
     // --------------------------------------------------------------- playurl
 
+    // 映射 bilibili 的真实音频梯度，而不是宿主的通名：
+    // 64K / 132K / 192K(320K) / Hi-Res FLAC；杜比只作为无损档的降级流。
+    // hires 不对外声明，宿主请求 hires 时会回落到 lossless。
     const AUDIO_ORDER = {
-        standard: [30216, 30232, 30280],
-        high: [30280, 30232, 30216],
-        // bilibili 在 192K 和 FLAC 之间没有中间档：「超高」按 192K 处理，
-        // 以前这个键根本不存在，值是靠 `|| AUDIO_ORDER.high` 兜出来的——行为一样，
-        // 但写清楚，改 hight 时不会连带改掉它。
-        ultra: [30280, 30232, 30216],
-        lossless: [30251, 30250, 30280],
-        hires: [30251, 30250, 30280],
+        standard: [30216, 30232, 30280, 30380],
+        high: [30232, 30280, 30216, 30380],
+        ultra: [30380, 30280, 30232, 30216],
+        lossless: [30251, 30252, 30250, 30380, 30280],
+        hires: [30251, 30252, 30250, 30380, 30280],
     };
 
     /**
@@ -460,8 +485,10 @@ module.exports = function activate(api) {
         30216: '64K',
         30232: '132K',
         30280: '192K',
+        30380: '320K',
         30250: '杜比',
-        30251: 'FLAC',
+        30251: 'Hi-Res',
+        30252: 'FLAC',
     };
 
     function collectAudio(dash) {
@@ -658,6 +685,49 @@ module.exports = function activate(api) {
         return task;
     }
 
+    /**
+     * 列表接口（收藏夹 / 搜索 / 合集）不给 pages，但分P只有 view 接口能拿到。
+     * 这里按 bvid 批量补，复用 getView 的 10 分钟缓存和 cached 的 60 秒合并；
+     * 失败就原样返回，别因为一条视频的分P读不到就让整页空掉或吃 -412。
+     */
+    async function withPages(list) {
+        const items = Array.isArray(list) ? list : [];
+        const need = items.filter((item) => item && item.bvid
+            && !Array.isArray(item.pages)
+            && Number(item.partCount) !== 1);
+        const found = new Map();
+        for (let start = 0; start < need.length; start += 4) {
+            const batch = need.slice(start, start + 4);
+            const results = await Promise.all(batch.map(async (item) => {
+                try {
+                    const view = await cached(`pages:${item.bvid}`, 10 * 60 * 1000, () => getView(item.bvid));
+                    const pages = Array.isArray(view && view.pages) ? view.pages : [];
+                    return [item.bvid, pages
+                        .filter((page) => Number(page && page.page) > 0)
+                        .map((page) => ({
+                            page: Number(page.page),
+                            cid: page.cid,
+                            part: page.part || '',
+                            durationMs: (Number(page.duration) || 0) * 1000,
+                        }))];
+                } catch {
+                    return [item.bvid, null];
+                }
+            }));
+            for (const [bvid, pages] of results) {
+                if (pages && pages.length > 1) found.set(bvid, pages);
+            }
+            if (start + 4 < need.length) await sleep(120);
+        }
+        return items.map((item) => {
+            const next = { ...item };
+            const pages = Array.isArray(next.pages) ? next.pages : found.get(next.bvid);
+            if (pages) next.pages = pages;
+            delete next.partCount;
+            return next;
+        });
+    }
+
     /** 丢掉某一类记忆（收藏夹条数、喜欢列表在收藏之后必须重读）。 */
     function forget(prefix) {
         for (const key of memo.keys()) {
@@ -676,6 +746,13 @@ module.exports = function activate(api) {
                 mid: data.mid ? String(data.mid) : '',
                 uname: data.uname || '',
                 face: cover(data.face),
+                // 宿主账号行只要 vipType 非 0 就会画会员标记；bilibili 的 1/2 分别
+                // 是月度 / 年度大会员，宿主不区分。nav 偶尔只给 vipStatus，兜底成 1。
+                vipType: Number(data.vipType) > 0
+                    ? Number(data.vipType)
+                    : (Number(data.vipStatus) > 0 || data.isVIP === true ? 1 : 0),
+                vipDueDate: Number(data.vipDueDate) || 0,
+                vipLabel: String((data.vipLabel && data.vipLabel.text) || ''),
                 saved: Boolean(state.cookie),
                 /**
                  * 0.9.1：接口到底有没有给出答案。
@@ -955,10 +1032,10 @@ module.exports = function activate(api) {
      * 一个收藏夹里的全部 bvid，一次请求拿完（这个接口不分页）。
      * 宿主拿它判断哪首歌已经「喜欢」了——心形按钮的初始状态就靠它。
      */
-    handle('likedIds', async ({ folder } = {}) => {
+    handle('likedIds', async ({ folder, expandParts = false } = {}) => {
         let fid = String(folder || '').trim();
         if (!fid) fid = await defaultFolderId();
-        if (!fid) return { ids: [], folder: '' };
+        if (!fid) return { ids: [], folder: '', baseCount: 0 };
         const ids = await cached(`liked:${fid}`, TTL.liked, async () => {
             const json = await getJson(`${API}/x/v3/fav/resource/ids?media_id=${encodeURIComponent(fid)}&platform=web`);
             if (!json || json.code !== 0) throw new Error(`bili: 「喜欢」列表读不到（${(json && json.code) || ''}）`);
@@ -966,7 +1043,21 @@ module.exports = function activate(api) {
                 .map((item) => (item && (item.bvid || item.bv_id)) || '')
                 .filter(Boolean);
         });
-        return { ids, folder: fid };
+        if (!expandParts) return { ids, folder: fid, baseCount: ids.length };
+        // 宿主按 sourceRef.mediaId 匹配喜欢态；分P歌曲是 bvid#N，所以要把已展开的 P
+        // 也放进 likedSongIds。只补前 200 个，多于 200 的只保留 bvid，避免启动时打爆 view 接口。
+        const expanded = await cached(`likedParts:${fid}`, TTL.liked, async () => {
+            const result = new Set(ids);
+            const targets = ids.slice(0, 200).map((bvid) => ({ bvid }));
+            const rows = await withPages(targets);
+            for (const row of rows) {
+                for (const page of (row && row.pages) || []) {
+                    if (Number(page && page.page) > 1) result.add(`${row.bvid}#${Number(page.page)}`);
+                }
+            }
+            return [...result];
+        });
+        return { ids: expanded, folder: fid, baseCount: ids.length };
     });
 
 
@@ -1001,6 +1092,7 @@ module.exports = function activate(api) {
                 cover: cover(item && item.cover),
                 durationMs: (Number(item && item.duration) || 0) * 1000,
                 pubdate: (Number(item && item.ctime) || 0) * 1000,
+                partCount: Math.max(0, Number(item && item.page) || 0),
                 index,
                 playable: Boolean(item && item.bvid
                     && (item.attr === 0 || item.attr === undefined)
@@ -1011,7 +1103,7 @@ module.exports = function activate(api) {
                 owner: (info.upper && info.upper.name) || '',
                 total: Number(info.media_count) || 0,
                 hasMore: Boolean(data.has_more),
-                items: list,
+                items: await withPages(list),
             };
         });
     });
@@ -1169,6 +1261,7 @@ module.exports = function activate(api) {
                 cover: cover(item && item.cover),
                 durationMs: (Number(item && item.duration) || 0) * 1000,
                 pubdate: (Number(item && item.ctime) || 0) * 1000,
+                partCount: Math.max(0, Number(item && item.page) || 0),
                 index,
                 // 同 folderItems：失效条目留着占位，交付方过滤
                 playable: Boolean(item && item.bvid
@@ -1180,7 +1273,7 @@ module.exports = function activate(api) {
                 owner: (info.upper && info.upper.name) || owner,
                 total: Number(info.media_count) || 0,
                 hasMore: Boolean(data.has_more),
-                items,
+                items: await withPages(items),
             };
         }
 
@@ -1204,7 +1297,7 @@ module.exports = function activate(api) {
                 total,
                 // 空页必须收敛：total 是接口给的原始总数，翻过头时别再让宿主原地重试
                 hasMore: items.length > 0 && hasMore,
-                items,
+                items: await withPages(items),
             };
         }
 
@@ -1218,7 +1311,7 @@ module.exports = function activate(api) {
         const items = withOwner((data.archives || []).map(itemOfArchive));
         const size = Number(pageInfo.page_size) || 20;
         const hasMore = pageInfo.has_more != null ? Boolean(pageInfo.has_more) : number * size < total;
-        return { title: '', owner, total, hasMore: items.length > 0 && hasMore, items };
+        return { title: '', owner, total, hasMore: items.length > 0 && hasMore, items: await withPages(items) };
     });
 
 
@@ -1450,7 +1543,7 @@ module.exports = function activate(api) {
             if (!data.has_more) break;
             if (page === pages) truncated = true;
         }
-        return { title, owner, total, items, truncated };
+        return { title, owner, total, items: await withPages(items), truncated };
     });
 
     handle('search', async ({ keyword, page = 1 }) => {
@@ -1474,10 +1567,15 @@ module.exports = function activate(api) {
             durationMs: parseDuration(item && item.duration),
             pubdate: (Number(item && item.pubdate) || 0) * 1000,
             description: String((item && item.description) || '').replace(/<[^>]+>/g, ''),
+            partCount: Math.max(0, Number(item && item.page) || 0),
             index,
             playable: Boolean(item && item.bvid && item.type !== 'ketang'),
         }));
-        return { items, total: Number(data.numResults) || 0, hasMore: (Number(page) || 1) < (Number(data.numPages) || 1) };
+        return {
+            items: await withPages(items),
+            total: Number(data.numResults) || 0,
+            hasMore: (Number(page) || 1) < (Number(data.numPages) || 1),
+        };
     });
 
     // 书库首页「探索」页签 / 推荐 feed
@@ -1505,7 +1603,7 @@ module.exports = function activate(api) {
         const data = (json && json.data) || {};
         const items = normalizeFeedItems(data.item);
         return {
-            items,
+            items: await withPages(items),
             nextFreshIdx: nextFeedCursor(idx, items.length),
             signedIn: hasSession(state.cookie),
         };
@@ -1608,7 +1706,14 @@ module.exports = function activate(api) {
         const { bvid, page } = splitId(id);
         const view = await getView(bvid);
         const raw = videoToRaw(view);
-        return { ...raw, page, cid: pickCid(view, page) };
+        const hit = (view.pages || []).find((item) => Number(item && item.page) === page);
+        return {
+            ...raw,
+            page,
+            cid: pickCid(view, page),
+            part: (hit && hit.part) || '',
+            ...(hit && Number(hit.duration) > 0 ? { durationMs: Number(hit.duration) * 1000 } : {}),
+        };
     });
 
     handle('subtitles', async ({ id, preferCC = true }) => {

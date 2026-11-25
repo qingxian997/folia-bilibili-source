@@ -20,7 +20,7 @@ globalThis.Event = dom.window.Event;
 const PROVIDER = 'folium.bilibili.bili';
 const SONG_ID = 'BV1mUAzeWEkr';
 
-const install = ({ song = null, settings = {}, signedIn = true, lyricsMissFirst = false, emptySubtitles = false, folders = null } = {}) => {
+const install = ({ song = null, settings = {}, signedIn = true, lyricsMissFirst = false, emptySubtitles = false, folders = null, vipType = 0 } = {}) => {
     const registered = { settings: [], commands: [] };
     const settingsValues = {
         pickerMode: 'hide',
@@ -40,7 +40,7 @@ const install = ({ song = null, settings = {}, signedIn = true, lyricsMissFirst 
     };
     const calls = { refreshed: 0, parsed: [], names: [], omniLyrics: 0, omniLyricsArgs: [], searched: [], omniSearch: [] };
     const rpcAnswers = {
-        status: signedIn ? { loggedIn: true, mid: '1', uname: '测试账号' } : { loggedIn: false },
+        status: signedIn ? { loggedIn: true, mid: '1', uname: '测试账号', vipType } : { loggedIn: false },
         folders: {
             mid: '1',
             owner: '',
@@ -163,6 +163,15 @@ const tick = () => new Promise((resolve) => setTimeout(resolve, 30));
 const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 const biliSong = { id: SONG_ID, title: 'また夏を追う', artist: 'ヨルシカ', source: PROVIDER };
+
+test('会员状态：getLoginStatus 把 vipType 交给宿主画会员标记', async () => {
+    const { folium, registered } = install({ song: biliSong, vipType: 2 });
+    const dispose = activate(folium);
+    await wait(120);
+    const profile = await registered.provider.capabilities['auth@1'].getLoginStatus();
+    assert.equal(profile.vipType, 2);
+    dispose();
+});
 
 test('设置面板：四组结构，默认全部折起来', async () => {
     const { folium, registered } = install();
@@ -295,13 +304,12 @@ test('歌词源：把 bilibili 加进宿主那张表，页签交给宿主自己�
     const dispose = activate(folium);
     await wait(120);
 
-    assert.ok(host.y.some((item) => item && item.id === 'bili'), 'S 里多了一项 bilibili');
-    assert.ok(host.b.includes('bili'), 'id 快照也补上了');
+    assert.ok(host.c.some((item) => item && item.id === 'bili'), '声明表里多了一项 bilibili');
 
-    // 宿主那张 id→元数据表是模块私有的，只能靠拦原型顶上；`T(id)` 和 `E(id)` 都得认。
+    // 0.8.0 注册表：声明表、元数据表和实现表都要认得 bili。
     assert.equal(host.knows('bili'), true, 'T(id) 认得 bilibili，页签文字才不会回落成网易云');
     assert.equal(host.lookup('bili') && host.lookup('bili').labelKey, 'bilibili', 'E(id) 拿得到元数据');
-    assert.equal(host.implOf('bili') && host.implOf('bili').labelKey, 'bilibili', '取词实现表也认得，否则选中就炸');
+    assert.equal(typeof (host.implOf('bili') && host.implOf('bili').search), 'function', '取词实现表也认得，否则选中就炸');
 
     assert.equal(host.knows('netease'), true, '别的源原样返回');
     assert.equal(host.lookup('netease') && host.lookup('netease').labelKey, 'lyricProvider.netease');
@@ -311,8 +319,7 @@ test('歌词源：把 bilibili 加进宿主那张表，页签交给宿主自己�
     assert.equal(host.lookup('bili'), undefined, '卸载之后把 get 换回去');
     assert.equal(host.knows('bili'), false, 'has 也换回去了');
     assert.equal(host.implOf('bili'), undefined);
-    assert.equal(host.y.some((item) => item && item.id === 'bili'), false, '数组里那一项也撤了');
-    assert.equal(host.b.includes('bili'), false, 'id 快照也撤了');
+    assert.equal(host.c.some((item) => item && item.id === 'bili'), false, '声明表里那一项也撤了');
 });
 
 test('歌词源：卸载之后还能再装回来（宿主热重载走的就是这条路）', async () => {
@@ -327,11 +334,11 @@ test('歌词源：卸载之后还能再装回来（宿主热重载走的就是�
     const second = activate(folium);
     await wait(120);
     assert.equal(host.knows('bili'), true, '重新激活之后又认得 bilibili 了');
-    assert.ok(host.y.some((item) => item && item.id === 'bili'), '数组里又有了');
+    assert.ok(host.c.some((item) => item && item.id === 'bili'), '声明表里又有了');
     assert.equal(host.lookup('bili').labelKey, 'bilibili', '标签没回落成网易云');
     second();
     assert.equal(host.knows('bili'), false, '第二次也卸载干净');
-    assert.equal(host.y.some((item) => item && item.id === 'bili'), false);
+    assert.equal(host.c.some((item) => item && item.id === 'bili'), false);
 });
 
 test('歌词源：窗口里搜索走 omni，并补成宿主歌曲形状', async () => {
@@ -339,8 +346,8 @@ test('歌词源：窗口里搜索走 omni，并补成宿主歌曲形状', async 
     const dispose = activate(folium);
     await wait(120);
 
-    const meta = host.lookup('bili');
-    const items = await meta.search('また夏を追う', 8);
+    const impl = host.implOf('bili');
+    const items = await impl.search('また夏を追う', 8);
 
     assert.equal(calls.omniSearch.length, 1, '只问了一次');
     assert.equal(calls.omniSearch[0].query, 'また夏を追う');
@@ -374,15 +381,14 @@ test('歌词源：选中一条之后只取 CC 字幕，不借第三方歌词', a
     const dispose = activate(folium);
     await wait(120);
 
-    const items = await host.lookup('bili').search('また夏を追う', 8);
-    const got = await host.lookup('bili').fetch(items[0]);
+    const items = await host.implOf('bili').search('また夏を追う', 8);
+    const got = await host.implOf('bili').fetch(items[0]);
 
     assert.equal(calls.omniLyrics, 0, '完全没问 omni 取词，第三方歌词匹配不会掺进来');
     assert.ok(calls.names.includes('subtitles'), '只问了 CC 字幕');
-    // 0.8.0 的歌词注册表按宿主原生形状收一条 lrc 轨；
-    // 逐行的 words 由宿主的歌词解析器补齐，模组不再自己塞 words。
-    assert.equal(got.main.format, 'lrc');
-    assert.equal(got.main.text, '[00:01.000]第一句\n[00:03.000]第二句');
+    // 匹配歌词面板走宿主的 kj()：它读 fetch().lyrics.lines[].fullText，
+    // 不是 lyrics@1 那套 { main: { format, text } }。形状给错就显示「无可用歌词」。
+    assert.deepEqual(got.lyrics.lines.map((line) => line.fullText), ['第一句', '第二句']);
     assert.equal(got.isPureMusic, false);
 
     dispose();
@@ -393,8 +399,8 @@ test('歌词源：视频没有 CC 字幕时明确返回空，不拿第三方歌�
     const dispose = activate(folium);
     await wait(120);
 
-    const items = await host.lookup('bili').search('また夏を追う', 8);
-    const got = await host.lookup('bili').fetch(items[0]);
+    const items = await host.implOf('bili').search('また夏を追う', 8);
+    const got = await host.implOf('bili').fetch(items[0]);
 
     assert.equal(got, null, '告诉宿主这个视频没词');
     assert.equal(calls.omniLyrics, 0, '没有偷偷回落第三方');
@@ -402,23 +408,36 @@ test('歌词源：视频没有 CC 字幕时明确返回空，不拿第三方歌�
     dispose();
 });
 
-test('音质面板：把宿主的「极高」换成这个视频实际的 192K', async () => {
-    const { folium } = install({ song: biliSong });
-    dom.window.location.hash = '#player';
+test('能力声明：音质只暴露 standard/high/ultra/lossless 四档', async () => {
+    const { folium, registered } = install({ song: biliSong });
     const dispose = activate(folium);
-
-    const row = document.createElement('div');
-    row.innerHTML = '<div>默认音质</div><button><span>极高</span></button>';
-    document.body.appendChild(row);
-
-    await wait(1400);
-    assert.match(row.textContent, /192K/);
-    assert.equal(row.textContent.includes('极高'), false, '通名换成实际码率');
-
-    row.remove();
-    dom.window.location.hash = '';
+    await wait(120);
+    assert.deepEqual(
+        registered.provider.capabilities['playback.audio@1'].audioQualityLevels,
+        ['standard', 'high', 'ultra', 'lossless'],
+    );
     dispose();
 });
+
+for (const [label, expected] of [['极高', '132K'], ['超高', '192K']]) {
+    test(`音质面板：宿主「${label}」换成 bilibili 实际的 ${expected}`, async () => {
+        const { folium } = install({ song: biliSong });
+        dom.window.location.hash = '#player';
+        const dispose = activate(folium);
+
+        const row = document.createElement('div');
+        row.innerHTML = `<div>默认音质</div><button><span>${label}</span></button>`;
+        document.body.appendChild(row);
+
+        await wait(1400);
+        assert.match(row.textContent, new RegExp(expected));
+        assert.equal(row.textContent.includes(label), false, '通名换成实际码率');
+
+        row.remove();
+        dom.window.location.hash = '';
+        dispose();
+    });
+}
 
 test('设置面板：两个实例的折叠状态互不影响', async () => {
     const { folium, registered } = install();

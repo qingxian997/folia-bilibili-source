@@ -169,3 +169,46 @@ test('同一个收藏夹的列表在 TTL 内只请求一次（连并发也只发
         dispose();
     }
 });
+
+test('view 不给 pages 时用 pagelist 兜底，分P仍然展开', async () => {
+    const { api, handlers } = makeApi();
+    const originalFetch = globalThis.fetch;
+    const pages = Array.from({ length: 59 }, (_, index) => ({
+        cid: 1000 + index,
+        page: index + 1,
+        part: `P${index + 1}`,
+        duration: 200 + index,
+    }));
+    globalThis.fetch = async (url) => {
+        const text = String(url || '');
+        const body = text.includes('/x/player/pagelist')
+            ? { code: 0, data: pages }
+            : {
+                code: 0,
+                data: {
+                    bvid: 'BVpagelist',
+                    title: '分P兜底',
+                    owner: { name: 'UP' },
+                    pic: '',
+                    duration: 14847,
+                    pubdate: 0,
+                    cid: 1000,
+                },
+            };
+        return {
+            ok: true,
+            status: 200,
+            text: async () => JSON.stringify(body),
+            headers: { get: () => '', getSetCookie: () => [] },
+        };
+    };
+    try {
+        const dispose = activate(api);
+        const song = await handlers.song({ id: 'BVpagelist' });
+        assert.equal(song.pages.length, 59, 'view 没 pages 时仍从 pagelist 补出全部分P');
+        assert.equal(song.pages[15].durationMs, 215000);
+        dispose();
+    } finally {
+        globalThis.fetch = originalFetch;
+    }
+});

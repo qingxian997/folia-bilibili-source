@@ -1,6 +1,6 @@
 {
     "name": "folia-bilibili-source",
-    "version": "2.0.1",
+    "version": "2.0.2",
     "private": true,
     "description": "把 bilibili 当成 Folia / Folium 里的一个音源（预览版）",
     "type": "module",

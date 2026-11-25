@@ -7,7 +7,10 @@ import assert from 'node:assert/strict';
 import {
     foldersToCollections,
     videoToSong,
+    videoToSongs,
+    expandPages,
     readTrackRange,
+    readExpandedRange,
     refineCollection,
     toLoginState,
     FOLDER_PAGE_SIZE,
@@ -262,4 +265,113 @@ test('分页：一页全被过滤掉就明确说「没有更多」', async () =>
     assert.equal(page.items.length, 0);
     assert.equal(page.hasMore, false, '0 条还报 hasMore 就是死循环');
     assert.ok(calls <= 8, '最多翻到上限就停');
+});
+
+test('分P视频拆成多首歌：P1 保持纯 bvid，P2 起用 #N 且不丢歌词缓存兼容', () => {
+    const raw = {
+        bvid: 'BV1xx411c7mD',
+        title: '一个分P视频',
+        author: 'UP',
+        pages: [
+            { page: 1, cid: 111, part: '上', durationMs: 60000 },
+            { page: 2, cid: 222, part: '下', durationMs: 90000 },
+        ],
+    };
+    const songs = videoToSongs(raw, { providerId: PROVIDER });
+    assert.equal(songs.length, 2);
+    assert.equal(songs[0].id, 'BV1xx411c7mD');
+    assert.equal(songs[0].sourceRef.providerData, undefined);
+    assert.equal(songs[1].id, 'BV1xx411c7mD#2');
+    assert.equal(songs[1].title.includes('P2'), true);
+    assert.equal(songs[1].title.includes('下'), true);
+    assert.equal(songs[1].sourceRef.mediaId, 'BV1xx411c7mD#2');
+    assert.deepEqual(songs[1].sourceRef.providerData, { page: 2, cid: '222' });
+    assert.equal(songs[0].durationMs, 60000);
+    assert.equal(songs[1].durationMs, 90000, '分P用单P时长，不是整视频时长');
+    assert.equal(expandPages({ bvid: 'x' }).length, 1, '单P不变');
+});
+
+test('分页按原始视频条目前进，分P展开后仍不重复、不越界', async () => {
+    const raw = {
+        bvid: 'BVmulti',
+        title: '多P',
+        pages: [{ page: 1, cid: 1 }, { page: 2, cid: 2 }, { page: 3, cid: 3 }],
+    };
+    const answer = await readTrackRange({
+        offset: 0,
+        limit: 3,
+        pageSize: 10,
+        fetchPage: async () => ({ items: [raw], hasMore: false, total: 1 }),
+        expand: expandPages,
+    });
+    assert.deepEqual(answer.items.map((item) => item.bvid || item.id), ['BVmulti', 'BVmulti', 'BVmulti']);
+    assert.equal(answer.items[2].page, 3);
+    assert.equal(answer.nextOffset, 1, '游标按视频数，不按展开后的歌曲数');
+});
+
+test('readTrackRange 在视频内部被 limit 截断时返回剩余分P', async () => {
+    const raw = {
+        bvid: 'BVpartial',
+        title: '多P',
+        pages: [
+            { page: 1, cid: 1, part: 'a' },
+            { page: 2, cid: 2, part: 'b' },
+            { page: 3, cid: 3, part: 'c' },
+        ],
+    };
+    const range = await readTrackRange({
+        offset: 0,
+        limit: 2,
+        pageSize: 10,
+        fetchPage: async () => ({ items: [raw], hasMore: false, total: 1 }),
+        expand: expandPages,
+    });
+    assert.equal(range.items.length, 2);
+    assert.equal(range.partial.bvid, 'BVpartial');
+    assert.equal(range.partial.variants.length, 1);
+    assert.equal(range.partial.variants[0].page, 3);
+    assert.equal(range.partial.rawCursor, 1);
+    assert.equal(range.hasMore, true, '还有 P 没交完，不能说到底');
+});
+
+test('readExpandedRange 对外用歌曲 offset，跨页续交剩余分P', async () => {
+    const multi = {
+        bvid: 'BVmulti',
+        title: '多P',
+        pages: [
+            { page: 1, cid: 1, part: 'a' },
+            { page: 2, cid: 2, part: 'b' },
+            { page: 3, cid: 3, part: 'c' },
+        ],
+    };
+    const single = { bvid: 'BVsingle', title: '单P' };
+    const fetchPage = async () => ({ items: [multi, single], hasMore: false, total: 2 });
+    const pendingParts = new Map();
+    const rangeCursors = new Map();
+    const first = await readExpandedRange({
+        offset: 0,
+        limit: 2,
+        key: 'folder:1',
+        pageSize: 10,
+        fetchPage,
+        expand: expandPages,
+        pendingParts,
+        rangeCursors,
+    });
+    assert.deepEqual(first.items.map((x) => x.id), ['BVmulti', 'BVmulti#2']);
+    assert.equal(first.nextOffset, 2, '对外是歌曲 offset，不是视频游标 1');
+    assert.equal(first.hasMore, true);
+
+    const second = await readExpandedRange({
+        offset: 2,
+        limit: 2,
+        key: 'folder:1',
+        pageSize: 10,
+        fetchPage,
+        expand: expandPages,
+        pendingParts,
+        rangeCursors,
+    });
+    assert.deepEqual(second.items.map((x) => x.id || x.bvid), ['BVmulti#3', 'BVsingle']);
+    assert.equal(second.nextOffset, 4);
 });

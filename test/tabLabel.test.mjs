@@ -146,3 +146,23 @@ test('逐节点判定变假后只还原那一颗，其余胶囊仍保持改名',
     assert.equal(enPlaylists(dom), 'Favorites');
     relabel.stop();
 });
+
+test('0.8.x 书库分组按钮和 shadow root 里的页签也能改名', () => {
+    const dom = new JSDOM(
+        '<!doctype html><html lang="zh-CN"><body>' +
+        '<nav aria-label="书库导航">' +
+        '<button data-home-group="albums" title="专辑"><span>专辑</span></button>' +
+        '<button data-home-group="playlist" title="歌单"><span>歌单</span></button>' +
+        '</nav><div id="host"></div></body></html>',
+        { pretendToBeVisual: true },
+    );
+    const shadow = dom.window.document.getElementById('host').attachShadow({ mode: 'open' });
+    shadow.innerHTML = '<nav aria-label="搜索分类"><button role="tab"><span>專輯</span></button></nav>';
+    const relabel = createTabRelabel({ document: dom.window.document, isActive: () => true });
+    relabel.start();
+    assert.equal(dom.window.document.querySelector('[data-home-group="albums"] span').textContent, '合集');
+    assert.equal(dom.window.document.querySelector('[data-home-group="playlist"] span').textContent, '收藏');
+    assert.equal(shadow.querySelector('button span').textContent, '合集');
+    relabel.stop();
+    assert.equal(shadow.querySelector('button span').textContent, '專輯');
+});
