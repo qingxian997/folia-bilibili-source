@@ -161,6 +161,39 @@ if (!manifest || typeof manifest !== 'object' || Array.isArray(manifest)) {
     }
 }
 
+// 运行包里的相对 import 必须带内容版本号。
+// 宿主只给入口 URL 加 digest，相对 import 不带版本；升级后同一进程内会命中旧模块缓存，
+// 报「does not provide an export named …」。这条检查同时保证 build/ 与源码同步。
+try {
+    const { build } = await import('./version-imports.mjs');
+    build();
+    const bare = [];
+    const scan = (rel) => {
+        const text = fs.readFileSync(path.join(ROOT, 'build', rel), 'utf8');
+        for (const quote of ['"', "'"]) {
+            for (const chunk of text.split(`from ${quote}`).slice(1)) {
+                const spec = chunk.split(quote)[0];
+                if (spec.startsWith('.') && !spec.includes('?v=')) bare.push(`${rel} -> ${spec}`);
+            }
+        }
+    };
+    scan('client.mjs');
+    const libDir = path.join(ROOT, 'build', 'lib');
+    if (fs.existsSync(libDir)) {
+        for (const name of fs.readdirSync(libDir)) {
+            if (name.endsWith('.mjs')) scan(`lib/${name}`);
+        }
+    }
+    if (!fs.existsSync(path.join(ROOT, 'build', 'vendor', 'qrcode.mjs'))) {
+        errors.push('build/vendor/qrcode.mjs 不存在：version-imports 没把 vendor 复制进去');
+    }
+    if (bare.length) {
+        errors.push(`build/ 里有 ${bare.length} 处相对 import 没带版本号：${bare.slice(0, 3).join('，')}`);
+    }
+} catch (error) {
+    errors.push(`生成 build/ 失败：${error && error.message}`);
+}
+
 if (errors.length) {
     console.error('mod.json 有 %d 处问题：', errors.length);
     for (const message of errors) console.error('  -', message);

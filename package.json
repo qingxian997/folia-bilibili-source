@@ -1,6 +1,6 @@
 {
     "name": "folia-bilibili-source",
-    "version": "2.0.2",
+    "version": "2.0.3",
     "private": true,
     "description": "把 bilibili 当成 Folia / Folium 里的一个音源（预览版）",
     "type": "module",
@@ -12,7 +12,8 @@
     },
     "scripts": {
         "test": "node scripts/test.mjs",
-        "check": "node scripts/check-manifest.mjs"
+        "check": "node scripts/check-manifest.mjs",
+        "build": "node scripts/version-imports.mjs"
     },
     "devDependencies": {
         "jsdom": "^30.1.3"

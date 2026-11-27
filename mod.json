@@ -2,7 +2,7 @@
     "folium": 2,
     "id": "bilibili",
     "name": "bilibili",
-    "version": "2.0.2",
+    "version": "2.0.3",
     "author": "qingxian997",
     "description": "把 bilibili 当成一个音源：搜全站视频，收藏夹和 UP 主合集进「收藏」「合集」，歌词用视频字幕。扫码登录。",
     "main": "index.cjs",

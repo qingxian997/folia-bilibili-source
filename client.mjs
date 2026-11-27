@@ -12,6 +12,7 @@ import qrcode from './vendor/qrcode.mjs';
 import { parseVideoTitle, normalizeForMatch } from './lib/title.mjs';
 import { subtitleToLines, subtitleToLrc, omniLyricsToTracks, fillMissingWords } from './lib/lrc.mjs';
 import { canMutateOwnCollection } from './lib/hostlib.mjs';
+import { ensureEnabledAfterInstall } from './lib/afterInstall.mjs';
 import {
     FOLDER_PAGE_SIZE,
     videoToSong,
@@ -55,7 +56,7 @@ const HOST_LYRIC_ORDER = ['netease', 'qq', 'kugou'];
 /** 宿主用它画音源徽标：bilibili 的粉。 */
 const BILI_PINK = '#FB7299';
 /** 面板上显示的版本号，和 mod.json 保持一致（打包校验会盯这一条）。 */
-const MOD_VERSION = '2.0.2';
+const MOD_VERSION = '2.0.3';
 /** 批量改收藏夹时每首之间的间隔：fav/resource/deal 连发几十个必吃 -412。 */
 const ADD_INTERVAL_MS = 250;
 
@@ -113,7 +114,6 @@ export default function activate(folium) {
     const qrKeys = new Map();
     /** 收藏夹封面（第一条视频的封面），宿主画卡片用。 */
     let covers = {};
-    let coverFill = null;
     let coverCooldownUntil = 0;
     /** 0.7.4：全站合集反查 / 收藏夹内容匹配的短缓存，按关键词隔离。 */
     const seasonSearchCache = new Map();
@@ -1638,9 +1638,9 @@ export default function activate(folium) {
     /**
      * 读一次封面缓存（只有本地存过的，不联网）。
      *
-     * 0.9.2：补封面要串行好几十秒，期间登录 / 设置面板也会来读一次缓存。以前两处
-     * 直接覆盖 `covers`，一份不含新封面的旧快照会把刚补好的结果抹掉 —— 表现就是
-     * 「封面闪一下又没了」。现在用 epoch 挡住过期结果，并把新旧结果合并而不是替换。
+     * 主进程返回的是「只有新鲜正结果」的快照，所以这里整体替换，不再和新旧值合并。
+     * 合并会把过期项和空数组又带回来，表现就是「封面闪一下又没了」。
+     * epoch 只用来挡「读的过程中又有更新的快照落地」这一种竞态。
      */
     let coverEpoch = 0;
     async function loadCovers(reset = false) {
@@ -1653,7 +1653,8 @@ export default function activate(folium) {
             /* 读不到就当没有 */
         }
         if (epoch !== coverEpoch || disposed) return covers;
-        covers = reset ? value : { ...covers, ...value };
+        // 主进程的快照已经是「只有新鲜正结果」，直接替换；再合并旧值会把过期项带回来。
+        covers = value;
         return covers;
     }
 
@@ -2079,54 +2080,86 @@ export default function activate(folium) {
     }
 
     /**
-     * 收藏夹封面 = 夹里第一条视频的封面。bilibili 一次只给一条，所以串行、慢慢来，
-     * 拿齐了再让宿主重读一次账号（它自己会把封面画上）。
+     * 封面：把缺的夹子交给主进程队列，然后按快照轮询。
+     *
+     * 客户端不再自己算 missing、也不再合并「整份原始 cache」——那两份旧快照互相覆盖，
+     * 就是「封面闪一下又没了」。现在主进程只回新鲜的正结果，这里整体替换即可。
      */
-    function fillMissingCovers(folders, force = false, max = Infinity) {
-        if (Date.now() < coverCooldownUntil) return coverFill;
-        const missing = folders
-            .filter((folder) => !(covers[String(folder.id)] || []).length)
-            .map((folder) => String(folder.id))
-            .slice(0, Math.max(0, Number(max) || Infinity));
-        if (!missing.length || coverFill) return coverFill;
-        coverFill = (async () => {
-            try {
-                const answer = await rpc('fillCovers', { ids: missing, ...(force ? { force: true } : {}) });
-                // 补完让 epoch 作废：期间若有人读过缓存，它那份旧快照不再作数；合并保留新封面。
-                coverEpoch += 1;
-                if (answer && answer.covers) {
-                    covers = { ...covers, ...answer.covers };
-                    await refreshWall();
-                }
-            } catch (error) {
-                const message = String(error && error.message);
-                if (/412|352|429|799|限流|拦截/.test(message)) {
-                    coverCooldownUntil = Date.now() + 5 * 60 * 1000;
-                    log.warn('bili: 封面读取被限流，5 分钟内不再主动补', message);
-                } else {
-                    log.warn('bili: 收藏夹封面没取全', message);
-                }
-            } finally {
-                coverFill = null;
-            }
-        })();
-        return coverFill;
+    let coverPumpRunning = false;
+
+    function applyCoverState(state) {
+        if (!state || !state.covers) return false;
+        if (JSON.stringify(state.covers) === JSON.stringify(covers)) return false;
+        covers = state.covers;
+        coverEpoch += 1;
+        return true;
     }
 
-    /** 刚登录时缓存里还没有封面：小批量补一轮，其余交给宿主读账号时懒加载。 */
+    async function pumpCovers(rounds = 0) {
+        if (coverPumpRunning || disposed) return;
+        coverPumpRunning = true;
+        try {
+            const state = await rpc('cover.state');
+            if (applyCoverState(state)) await refreshWall();
+            const pending = Number(state && state.pending) || 0;
+            const until = Number(state && state.cooldownUntil) || 0;
+            if (!pending) {
+                coverCooldownUntil = 0;
+                return;
+            }
+            if (until > Date.now()) {
+                // 主进程已经在退避，这里不要自己再打接口
+                coverCooldownUntil = until;
+                log.warn('bili: 封面补全被限流，等冷却结束再继续');
+                return;
+            }
+            if (rounds >= 20) return;
+            later(() => { void pumpCovers(rounds + 1); }, 3000);
+        } catch (error) {
+            log.warn('bili: 封面状态读不到', String(error && error.message));
+        } finally {
+            coverPumpRunning = false;
+        }
+    }
+
+    /**
+     * @param {Array} folders 收藏夹列表
+     * @param {boolean} force 忽略缓存（「刷新缓存」按钮用）
+     * @param {number} max 最多提交几个；登录首屏只提交一小批，其余排队慢慢补
+     */
+    function fillMissingCovers(folders, force = false, max = Infinity) {
+        if (Date.now() < coverCooldownUntil) return Promise.resolve();
+        const ids = (Array.isArray(folders) ? folders : [])
+            .map((folder) => String(folder && folder.id))
+            .filter(Boolean);
+        const slice = Number.isFinite(max) ? ids.slice(0, Math.max(0, Number(max))) : ids;
+        if (!slice.length) return Promise.resolve();
+        return (async () => {
+            try {
+                const state = await rpc('ensureCovers', { ids: slice, ...(force ? { force: true } : {}) });
+                if (applyCoverState(state)) await refreshWall();
+                if (Number(state && state.pending) > 0) void pumpCovers();
+            } catch (error) {
+                log.warn('bili: 收藏夹封面没取全', String(error && error.message));
+            }
+        })();
+    }
+
+    /** 刚登录时缓存里还没有封面：整批交给主进程队列，首屏先画已有的，其余排队慢慢补。 */
     async function refreshCoversAfterLogin() {
         clearCaches();
         covers = {};
         try {
             const snap = await librarySnapshot();
-            // 不再 force 全量：客户端看不到主进程的负缓存，force 会把限流后的空值又打一遍。
-            // 12 个封顶，剩下的等 getUserPlaylists 正常补。
-            await fillMissingCovers((snap && snap.folders) || [], false, 12);
+            // 不再 force：主进程自己知道哪些是限流失败，force 会把它们又打一遍。
+            // 这里只负责把所有夹子排进队列，数量上限和退避都在主进程控制。
+            void fillMissingCovers((snap && snap.folders) || []);
         } catch (error) {
             log.warn('bili: 登录后补封面失败', String(error && error.message));
         }
         covers = await loadCovers(true);
         await refreshWall();
+        void pumpCovers();
     }
 
     /**
@@ -2486,6 +2519,29 @@ export default function activate(folium) {
     }
 
     /** 下载、校验、然后把本地路径交给宿主安装；确认弹窗由宿主负责。 */
+    /**
+     * 安装好了以后把开关重新打开。
+     *
+     * 宿主认定「文件换了 = 旧信任作废」，装完一定是 disabled，而且它自己不会弹确认。
+     * 这里调 setEnabled 走宿主自己的确认弹窗；拿不到接口就明确告诉用户去哪点。
+     */
+    async function enableAfterInstall() {
+        const mods = typeof window !== 'undefined' && window.electron ? window.electron.mods : null;
+        const outcome = await ensureEnabledAfterInstall({
+            mods,
+            id: 'bilibili',
+            onManual: (error) => {
+                if (error) log.warn('bili: 更新后自动启用失败', String(error && error.message));
+                toast(
+                    t('新版本已安装。请到 设置 → 模组 → bilibili 打开开关并确认信任。',
+                        'Installed. Open Settings → Mods → bilibili, switch it on and confirm trust.'),
+                    'warning',
+                );
+            },
+        });
+        return outcome;
+    }
+
     async function installUpdate() {
         if (autoInstalling) return { skipped: true };
         autoInstalling = true;
@@ -2499,7 +2555,11 @@ export default function activate(folium) {
                 try {
                     const result = window.electron.mods.installModFromZip(saved.file);
                     if (result && typeof result.then === 'function') {
-                        result.catch((error) => log.warn('bili: 更新安装失败', String(error && error.message)));
+                        result
+                            // 装完留一点时间给宿主落盘，再请它弹确认。
+                            .then(() => new Promise((resolve) => setTimeout(resolve, 600)))
+                            .then(() => enableAfterInstall())
+                            .catch((error) => log.warn('bili: 更新安装失败', String(error && error.message)));
                     }
                 } catch (error) {
                     log.warn('bili: 更新安装失败', String(error && error.message));
@@ -2885,7 +2945,7 @@ export default function activate(folium) {
         if (watchTimer) clearTimeout(watchTimer);
         watchTimer = 0;
         wallTimer = 0;
-        coverFill = null;
+        coverPumpRunning = false;
         seasonSearchCache.clear();
         folderMatchCache.clear();
         inflightSeason.clear();

@@ -31,7 +31,7 @@ const jsonResponse = (body, status = 200) => new Response(JSON.stringify(body), 
 test('封面 RPC 都注册上了', () => {
     const { api, handlers } = makeApi();
     const dispose = activate(api);
-    for (const name of ['covers', 'fillCovers', 'folderCover', 'clearCache']) {
+    for (const name of ['covers', 'fillCovers', 'folderCover', 'clearCache', 'ensureCovers', 'cover.state']) {
         assert.equal(typeof handlers[name], 'function', name);
     }
     dispose();
@@ -126,6 +126,89 @@ test('清缓存会清掉封面：再读 covers 是空的', async () => {
         const after = (await handlers.covers()).covers;
         assert.ok(!after['3001'], 'clearCache 后封面缓存被清掉');
         assert.ok(!store.covers, '落盘的封面缓存也被删掉');
+    } finally {
+        globalThis.fetch = realFetch;
+        dispose();
+    }
+});
+
+test('ensureCovers 入队后由后台补完，快照里只剩正结果', async () => {
+    const { api, handlers } = makeApi();
+    const dispose = activate(api);
+    const realFetch = globalThis.fetch;
+    globalThis.fetch = async (url) => {
+        const id = /media_id=(\d+)/.exec(String(url))[1];
+        return jsonResponse({ code: 0, data: { medias: [{ title: '歌', cover: `//i0.hdslb.com/${id}.jpg` }] } });
+    };
+    try {
+        const first = await handlers.ensureCovers({ ids: ['4001'] });
+        assert.equal(first.pending, 1, '刚入队时应当是待补');
+        await new Promise((r) => setTimeout(r, 800));
+        const state = await handlers['cover.state']();
+        assert.equal(state.pending, 0, '后台补完之后队列应当清空');
+        assert.equal(state.covers['4001'][0], 'https://i0.hdslb.com/4001.jpg');
+    } finally {
+        globalThis.fetch = realFetch;
+        dispose();
+    }
+});
+
+test('被限流时不空转：夹子留在队列里，给出冷却时间，且不写负缓存', async () => {
+    const { api, handlers } = makeApi();
+    const dispose = activate(api);
+    const realFetch = globalThis.fetch;
+    globalThis.fetch = async () => jsonResponse({ code: -412, message: '风控' });
+    try {
+        const first = await handlers.ensureCovers({ ids: ['4101'] });
+        assert.equal(first.pending, 1);
+        // coverPage 内部会重试三次（700 + 1400ms 的间隔）
+        await new Promise((r) => setTimeout(r, 3200));
+        const state = await handlers['cover.state']();
+        assert.ok(state.pending >= 1, '被限流的夹子留在队列里，等冷却结束再试');
+        assert.ok(state.cooldownUntil > Date.now(), '要给出冷却结束时间，客户端据此停下');
+        assert.equal(state.covers['4101'], undefined, '限流不能被记成「没封面」');
+    } finally {
+        globalThis.fetch = realFetch;
+        dispose();
+    }
+});
+
+test('已有新鲜封面的夹子不会被重复排队', async () => {
+    const { api, handlers } = makeApi();
+    const dispose = activate(api);
+    const realFetch = globalThis.fetch;
+    globalThis.fetch = async () => jsonResponse({
+        code: 0, data: { medias: [{ title: '歌', cover: '//i0.hdslb.com/4201.jpg' }] },
+    });
+    try {
+        await handlers.fillCovers({ ids: ['4201'] });
+        const state = await handlers.ensureCovers({ ids: ['4201'] });
+        assert.equal(state.pending, 0, '已经有封面的不该再排一次');
+    } finally {
+        globalThis.fetch = realFetch;
+        dispose();
+    }
+});
+
+test('force 过的夹子即使已有封面也会真的重取一次', async () => {
+    const { api, handlers } = makeApi();
+    const dispose = activate(api);
+    const realFetch = globalThis.fetch;
+    let calls = 0;
+    // 只数封面接口：激活时还会打一次 buvid 的 finger/spi，那不算封面请求
+    globalThis.fetch = async (url) => {
+        if (String(url).includes('fav/resource/list')) calls += 1;
+        return jsonResponse({ code: 0, data: { medias: [{ title: '歌', cover: '//i0.hdslb.com/5001.jpg' }] } });
+    };
+    try {
+        await handlers.fillCovers({ ids: ['5001'] });
+        assert.equal(calls, 1);
+        const queued = await handlers.ensureCovers({ ids: ['5001'], force: true });
+        assert.equal(queued.pending, 1, 'force 必须真的排进队列');
+        await new Promise((r) => setTimeout(r, 800));
+        assert.equal(calls, 2, 'worker 不能因为「已有新鲜封面」把它丢掉');
+        const state = await handlers['cover.state']();
+        assert.equal(state.pending, 0);
     } finally {
         globalThis.fetch = realFetch;
         dispose();

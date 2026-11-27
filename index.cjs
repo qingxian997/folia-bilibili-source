@@ -1464,6 +1464,9 @@ module.exports = function activate(api) {
             let filled = 0;
             let failed = 0;
             let attempted = 0;
+            // 只回本次新补到的正结果。以前回吐整份 cache，客户端一合并就把过期项和
+            // 空数组又合回去了，表现是「封面闪一下又没了」。
+            const gained = {};
             for (const id of missing.slice(0, 40)) {
                 if (attempted) await sleep(700);
                 attempted += 1;
@@ -1477,6 +1480,7 @@ module.exports = function activate(api) {
                     }
                     if (answer.covers.length) {
                         cache[id] = { at: Date.now(), covers: answer.covers };
+                        gained[id] = cache[id];
                         filled += 1;
                     } else {
                         // code=0，确实是空夹 / 全是失效视频：合法负结果
@@ -1489,7 +1493,7 @@ module.exports = function activate(api) {
                 }
             }
             if (attempted) scheduleCoverSave();
-            return { covers: cache, filled, failed };
+            return { covers: gained, filled, failed };
         })();
 
         try {
@@ -1497,6 +1501,183 @@ module.exports = function activate(api) {
         } finally {
             filling = null;
         }
+    });
+
+    // ------------------------------------------------------ 封面补全队列
+    //
+    // 状态放在主进程：哪些夹子还缺封面、剩几个、冷却到什么时候，全由这里说了算。
+    // 渲染进程只消费一份「只有新鲜正结果」的快照，不再自己算 missing、也不再把整份
+    // 原始 cache 合并回去——那正是「封面闪一下又没了」「空白好几分钟」的来源。
+    //
+    // 队列落盘，重启后接着补；限流按 1 → 5 → 15 分钟退避，被限流的那条留在队首。
+    const COVER_QUEUE_MAX = 200;
+    const COVER_ROUND_MAX = 12;
+    const COVER_GAP_MS = 900;
+    const COVER_BACKOFF = [60 * 1000, 5 * 60 * 1000, 15 * 60 * 1000];
+
+    let coverQueue = null;
+    let coverCooldown = 0;
+    let coverStep = 0;
+    let coverWorker = null;
+    let coverLastError = '';
+    let coverQueueTimer = null;
+    /** 被 force 要求重取的 id：worker 不能因为「已有新鲜封面」把它们丢掉。 */
+    const coverForce = new Set();
+
+    async function loadCoverQueue() {
+        if (coverQueue) return coverQueue;
+        let saved = null;
+        try {
+            saved = api.storage && typeof api.storage.get === 'function' ? await api.storage.get('coverQueue') : null;
+        } catch {
+            saved = null;
+        }
+        coverQueue = Array.isArray(saved && saved.ids) ? saved.ids.map(String).slice(0, COVER_QUEUE_MAX) : [];
+        coverCooldown = Number((saved && saved.cooldownUntil) || 0) || 0;
+        coverStep = Number((saved && saved.step) || 0) || 0;
+        return coverQueue;
+    }
+
+    function scheduleCoverQueueSave() {
+        if (coverQueueTimer) return;
+        coverQueueTimer = setTimeout(() => {
+            coverQueueTimer = null;
+            try {
+                if (api.storage && typeof api.storage.set === 'function') {
+                    Promise.resolve(api.storage.set('coverQueue', {
+                        ids: coverQueue || [],
+                        cooldownUntil: coverCooldown,
+                        step: coverStep,
+                    })).catch(() => {});
+                }
+            } catch {
+                /* 存不下就算了，下次重来 */
+            }
+        }, 1200);
+        if (typeof coverQueueTimer.unref === 'function') coverQueueTimer.unref();
+    }
+
+    const coverIsFresh = (entry, now) => Boolean(
+        entry && Array.isArray(entry.covers) && entry.covers.length && now - Number(entry.at || 0) < COVER_TTL,
+    );
+
+    /** 只含新鲜的正结果：空数组、限流、过期项一律不出现。 */
+    async function coverSnapshot() {
+        const cache = await loadCoverCache();
+        const now = Date.now();
+        const fresh = {};
+        Object.keys(cache).forEach((key) => {
+            const entry = cache[key];
+            if (!coverIsFresh(entry, now)) return;
+            fresh[key] = entry.covers;
+        });
+        return {
+            covers: fresh,
+            pending: (coverQueue || []).length,
+            cooldownUntil: coverCooldown,
+            lastError: coverLastError,
+        };
+    }
+
+    /**
+     * 队列只入队，不阻塞调用方；真正的请求由 worker 一条一条发。
+     * `force` 的 id 记在 coverForce 里：worker 不能拿「已有新鲜封面」把它们直接扔掉，
+     * 否则「刷新缓存」按下去什么都不会重取。
+     */
+    async function enqueueCovers(ids, force = false) {
+        await loadCoverQueue();
+        const cache = await loadCoverCache();
+        const now = Date.now();
+        const queued = new Set(coverQueue);
+        for (const raw of (Array.isArray(ids) ? ids : [])) {
+            const id = String(raw || '');
+            if (!id || queued.has(id)) continue;
+            const entry = cache[id];
+            const at = Number((entry && entry.at) || 0);
+            if (!force) {
+                if (coverIsFresh(entry, now)) continue;
+                // 空结果只在「code=0 的真·空夹」时才会写，5 分钟内不重复问
+                if (entry && !entry.covers.length && now - at < COVER_MISS_TTL) continue;
+            } else {
+                coverForce.add(id);
+            }
+            if (coverQueue.length >= COVER_QUEUE_MAX) break;
+            coverQueue.push(id);
+            queued.add(id);
+        }
+        scheduleCoverQueueSave();
+        return coverQueue.length;
+    }
+
+    async function runCoverQueue() {
+        if (coverWorker) return coverWorker;
+        const job = (async () => {
+            await loadCoverQueue();
+            const cache = await loadCoverCache();
+            let done = 0;
+            const drop = (id) => {
+                const at = coverQueue.indexOf(id);
+                if (at >= 0) coverQueue.splice(at, 1);
+                coverForce.delete(id);
+            };
+            while (coverQueue.length && done < COVER_ROUND_MAX) {
+                if (coverCooldown > Date.now()) break;
+                const id = coverQueue[0];
+                // force 过的 id 即使已有新鲜封面也要真的重取一次
+                if (!coverForce.has(id) && coverIsFresh(cache[id], Date.now())) {
+                    drop(id);
+                    continue;
+                }
+                if (done) await sleep(COVER_GAP_MS);
+                done += 1;
+                try {
+                    const answer = await coverPage(id);
+                    if (!answer.ok) {
+                        coverLastError = answer.code == null ? 'network' : String(answer.code);
+                        if (answer.throttled) {
+                            // 被限流：这条留在队首，整队停下来等冷却
+                            coverStep = Math.min(coverStep + 1, COVER_BACKOFF.length - 1);
+                            coverCooldown = Date.now() + COVER_BACKOFF[coverStep];
+                            api.log.warn('bili: 封面补全被限流，暂停', coverLastError);
+                            break;
+                        }
+                        // 单条失效 / 网络错误：跳过这条，继续后面的
+                        drop(id);
+                        continue;
+                    }
+                    coverStep = 0;
+                    drop(id);
+                    cache[id] = { at: Date.now(), covers: answer.covers.length ? answer.covers : [] };
+                } catch (error) {
+                    coverLastError = String(error && error.message);
+                    drop(id);
+                    api.log.warn('bili: 封面取不到', id, coverLastError);
+                }
+            }
+            if (done) scheduleCoverSave();
+            scheduleCoverQueueSave();
+            return done;
+        })();
+        coverWorker = job;
+        try {
+            return await job;
+        } finally {
+            if (coverWorker === job) coverWorker = null;
+        }
+    }
+
+    /** 把要补封面的夹子交给队列，立刻返回快照；客户端按 pending 决定要不要再来问。 */
+    handle('ensureCovers', async ({ ids, force } = {}) => {
+        await enqueueCovers(ids, Boolean(force));
+        // 不 await：这一轮可能十几秒，接口要立刻返回，让首屏先画出来
+        void runCoverQueue();
+        return coverSnapshot();
+    });
+
+    /** 只读快照：客户端轮询用，不会新增请求。 */
+    handle('cover.state', async () => {
+        await loadCoverQueue();
+        return coverSnapshot();
     });
 
     /**
@@ -1899,7 +2080,17 @@ module.exports = function activate(api) {
             clearTimeout(coverSaveTimer);
             coverSaveTimer = null;
         }
-        for (const key of ['covers', 'extras']) {
+        // 补封面的队列也要一起清：否则「刷新缓存」之后它还会拿旧队列去撞接口。
+        coverQueue = null;
+        coverCooldown = 0;
+        coverStep = 0;
+        coverLastError = '';
+        coverForce.clear();
+        if (coverQueueTimer) {
+            clearTimeout(coverQueueTimer);
+            coverQueueTimer = null;
+        }
+        for (const key of ['covers', 'extras', 'coverQueue']) {
             try {
                 if (api.storage && typeof api.storage.delete === 'function') {
                     await api.storage.delete(key);

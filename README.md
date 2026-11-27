@@ -8,16 +8,16 @@
 > **bilibili 音源**：把公开视频的声音、字幕和曲库信息整理成 Folia 认识的形状，沿用 Folia 的搜索、书库、播放器和歌词界面。
 
 > [!WARNING]
-> **2.0.2 正式版：Folium 2 原生音源。**
+> **2.0.3 正式版：Folium 2 原生音源。**
 >
 > 模组已按 `folium: 2` 的 `sources` 契约声明能力，不再借实验接口。正式版指的是功能完整、可直接安装使用；未经过社区审核与签名前，它仍是「未验证」的社区模组，需要开启「社区模组」开关才能安装运行。
 
-2.0.2 的变化见[更新报告](docs/RELEASE-2.0.2.md)。安装包在仓库 Releases，下载方法见下面的[快速开始](#快速开始)。
+2.0.3 的变化见[更新报告](docs/RELEASE-2.0.3.md)。安装包在仓库 Releases，下载方法见下面的[快速开始](#快速开始)。
 
 | | |
 | --- | --- |
 | 宿主 | Folia 0.8.x（模组系统 0.2.0 / Folium 2）；**本版本针对 Folia 0.8.0 验证** |
-| 模组版本 | 2.0.2（原生音源） |
+| 模组版本 | 2.0.3（原生音源） |
 | 许可证 | MIT |
 
 ![模组卡片](docs/screenshots/mod-card.jpg)
@@ -66,7 +66,7 @@
 
 ### 安装
 
-1. 从 [Releases](https://github.com/qingxian997/folia-bilibili-source/releases) 下载 `bilibili-2.0.2.zip`。
+1. 从 [Releases](https://github.com/qingxian997/folia-bilibili-source/releases) 下载 `bilibili-2.0.3.zip`。
 2. **完全退出 Folia**，只关窗口不算。
 3. 解压到 `%APPDATA%\Folia\mods\bilibili\`，`mod.json` 要在这一层。
 4. 启动 Folia，在「设置 → 模组 → 模组管理」打开 bilibili，确认信任后加载。
