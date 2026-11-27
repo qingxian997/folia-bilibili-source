@@ -132,4 +132,4 @@ does not provide an export named 'expandPages'
 ## 还差什么
 
 - 更新后触发信任确认：需要真有新 Release 才能验，本轮未测
-- 按用户要求**先不发布**：未提交、未推送、未发 Release
+- 已发布为 2.0.3（tag `v2.0.3`），包与源码包都在该 Release 下
